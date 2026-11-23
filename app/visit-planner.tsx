@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { ChevronLeft, ChevronRight, GripVertical, Plus } from "lucide-react";
-import { unitLabels, unitPath, type Building, type Directory, type Unit } from "../lib/directory";
+import { formatBuildingAddress, unitLabels, unitPath, type Building, type Directory, type Unit } from "../lib/directory";
 import {
   formatVisitTime, minuteToTime, offsetDate, shiftVisitPeriod, startOfWeek, timeToMinute, todayInVisitZone, visitLabels, visitPeriod,
   type VisitEvent, type VisitKind, type VisitView,
@@ -139,7 +139,7 @@ export function VisitPlanner({ directory, userId }: { directory: Directory; user
               <small>{[unitLabels[unit.kind], mainLanguage, otherLanguage && `${otherLanguage} sub-congregation`].filter(Boolean).join(" · ")}</small>
               {unit.sacrament_meeting_time && <small>Sacrament {formatVisitTime(timeToMinute(unit.sacrament_meeting_time))}</small>}
               {unit.council_meeting_time && <small>Council {formatVisitTime(timeToMinute(unit.council_meeting_time))}</small>}
-              {building && <small>{building.address}</small>}
+              {building && <small>{formatBuildingAddress(building)}</small>}
               <div className="toolbar">
                 <button className="text-button" disabled={scheduling} onClick={() => {
                   setEditor({ unit, day: days.find((day) => day >= anchor) ?? days[0] ?? anchor });
@@ -252,7 +252,7 @@ function VisitEditor({ entry, editable, building, close, done }: {
   return <Modal title={event ? visitLabels[event.kind] : isDrive ? "Add driving time" : "Schedule a visit"} close={() => { if (!busy) close(); }}>
     <form className="modal-body stack" onSubmit={submit}>
       {unit && <strong>{unit.name}</strong>}
-      {building && <small>{building.address}</small>}
+      {building && <small>{formatBuildingAddress(building)}</small>}
       {!editable && event && <p>Planned by {event.owner_email}</p>}
       {isDrive && <label>Trip label <span className="optional">optional</span>
         <input name="title" maxLength={150} defaultValue={event?.title ?? ""} disabled={!editable || busy} />

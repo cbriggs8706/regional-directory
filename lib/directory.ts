@@ -1,3 +1,5 @@
+import type { FocusType } from "./focus-people";
+
 export const unitLabels = {
   region: "Region",
   council: "Coordinating Council",
@@ -36,11 +38,45 @@ export type Unit = {
   notes: string | null;
 };
 
-export type StakeConference = { id: string; stake_id: string; begins_on: string; ends_on: string };
-export type Building = { id: string; address: string };
+export type Conference = { id: string; begins_on: string; ends_on: string };
+export type StakeConference = Conference & { stake_id: string };
+export type WardConference = Conference & { unit_id: string };
+export type Building = {
+  id: string;
+  address: string;
+  city: string | null;
+  state: string;
+  zip_code: string | null;
+  agent_stake_id: string | null;
+  photo_path: string | null;
+};
+
+export function formatBuildingAddress(building: Building) {
+  const stateAndZip = [building.state, building.zip_code].filter(Boolean).join(" ");
+  return [building.address, building.city, stateAndZip].filter(Boolean).join(", ");
+}
+
+export function buildingPhotoUrl(building: Building) {
+  return `/buildings/${building.id}/photo?v=${encodeURIComponent(building.photo_path?.split("/").pop() ?? "")}`;
+}
+
+export const buildingPhotoTypes = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as const;
+export const buildingPhotoMaxBytes = 4 * 1024 * 1024;
 export type Language = { id: string; name: string };
-export type Contact = { id: string; name: string; email: string | null; phone: string | null };
-export type CallingType = { id: string; name: string; level: CallingLevel; sort_order: number | null };
+export type Contact = {
+  id: string; name: string; email: string | null; phone: string | null;
+  focus_type: FocusType | null;
+  first_name: string | null;
+  last_name: string | null;
+  ward_id: string | null;
+  is_whatsapp: boolean;
+  baptized_on: string | null;
+  helper_number: string | null;
+  pid: string | null;
+};
+export type CallingType = {
+  id: string; name: string; level: CallingLevel; sort_order: number | null; parent_calling_type_id: string | null;
+};
 export type CallingName = { id: number; calling_type_id: string; previous_name: string; changed_at: string };
 export type Position = {
   id: string;
@@ -66,6 +102,7 @@ export type Directory = {
   units: Unit[];
   buildings: Building[];
   stake_conferences: StakeConference[];
+  ward_conferences: WardConference[] | null;
   languages: Language[];
   contacts: Contact[];
   calling_types: CallingType[];
@@ -88,8 +125,43 @@ export function hasSacramentMeeting(kind: UnitKind) {
   return kind === "ward" || kind === "branch";
 }
 
-export function supportsFhAssignment(level: CallingLevel) {
+export function supportsCallingHierarchy(level: CallingLevel) {
   return level === "stake" || level === "ward";
+}
+
+export function callingTree(callings: CallingType[]) {
+  const children = new Map<string | null, CallingType[]>();
+  for (const calling of callings) {
+    const parent = calling.parent_calling_type_id ?? null;
+    const siblings = children.get(parent) ?? [];
+    siblings.push(calling);
+    children.set(parent, siblings);
+  }
+  const ordered: { calling: CallingType; depth: number }[] = [];
+  function walk(parent: string | null, depth: number) {
+    for (const calling of children.get(parent) ?? []) {
+      ordered.push({ calling, depth });
+      walk(calling.id, depth + 1);
+    }
+  }
+  walk(null, 0);
+  return ordered;
+}
+
+export function callingAncestors(calling: CallingType, types: Map<string, CallingType>) {
+  const parents: CallingType[] = [];
+  const seen = new Set([calling.id]);
+  let parent = types.get(calling.parent_calling_type_id ?? "");
+  while (parent && !seen.has(parent.id)) {
+    seen.add(parent.id);
+    parents.unshift(parent);
+    parent = types.get(parent.parent_calling_type_id ?? "");
+  }
+  return parents;
+}
+
+export function callingPath(calling: CallingType, types: Map<string, CallingType>) {
+  return [...callingAncestors(calling, types), calling].map((entry) => entry.name).join(" / ");
 }
 
 export function unitPath(unit: Unit, units: Map<string, Unit>) {

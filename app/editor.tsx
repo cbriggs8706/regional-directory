@@ -1,21 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type ReactNode } from "react";
+import Image from "next/image";
 import { X } from "lucide-react";
-import { addCallingHolder, deleteRecord, saveRecord, type Resource } from "./actions";
+import { focusTypes, focusTypeLabels, type FocusType } from "../lib/focus-people";
+import { addCallingHolder, deleteRecord, saveBuilding, saveRecord, type Resource } from "./actions";
 import {
-  callingLevelLabel, callingLevels, hasSacramentMeeting, parentKinds, supportsFhAssignment, unitLabels, unitPath,
+  buildingPhotoMaxBytes, buildingPhotoTypes, buildingPhotoUrl, formatBuildingAddress,
+  callingAncestors, callingLevelLabel, callingLevels, callingPath, hasSacramentMeeting, parentKinds, supportsCallingHierarchy, unitLabels, unitPath,
   type Assignment, type Building, type CallingLevel, type CallingType, type Contact, type Directory, type Language, type Position,
-  type StakeConference, type Unit, type UnitKind,
+  type Conference, type Unit, type UnitKind,
 } from "../lib/directory";
 
 export type EditorState =
-  | { resource: "contacts"; row?: Contact }
+  | { resource: "contacts"; row?: Contact; ward?: Unit }
   | { resource: "units"; row?: Unit; parent?: Unit }
   | { resource: "buildings"; row?: Building }
-  | { resource: "stake_conferences"; row?: StakeConference; stake: Unit }
+  | { resource: "stake_conferences" | "ward_conferences"; row?: Conference; unit: Unit }
   | { resource: "languages"; row?: Language }
-  | { resource: "calling_types"; row?: CallingType }
+  | { resource: "calling_types"; row?: CallingType; parent?: CallingType }
   | { resource: "positions"; row?: Position; callingType?: CallingType }
   | { resource: "assignments"; row?: Assignment; position: Position }
   | { resource: "assignments"; row?: never; position?: never; unit: Unit; callingType: CallingType }
@@ -23,7 +26,7 @@ export type EditorState =
 
 const labels = {
   contacts: "Contact", units: "Unit", buildings: "Building", languages: "Language", calling_types: "Calling type",
-  stake_conferences: "Stake conference",
+  stake_conferences: "Stake conference", ward_conferences: "Ward conference",
   positions: "Calling in unit", assignments: "Assignment", directory_access: "Access",
 } satisfies Record<Resource, string>;
 
@@ -97,6 +100,11 @@ function ContactFields({ contact }: { contact?: Contact }) {
 export function Editor({ state, directory, close }: { state: EditorState; directory: Directory; close: () => void }) {
   const row = "row" in state ? state.row : undefined;
   const resource = state.resource;
+  const conference = state.resource === "stake_conferences" || state.resource === "ward_conferences" ? state : undefined;
+  const contact = state.resource === "contacts" ? state.row : undefined;
+  const ward = state.resource === "contacts" ? state.ward : undefined;
+  const [focusType, setFocusType] = useState<FocusType | "">(contact?.focus_type ?? (ward ? "recent_convert" : ""));
+  const recordLabel = conference ? `${unitLabels[conference.unit.kind]} conference` : focusType ? "Focus person" : labels[resource];
   const revoke = resource === "directory_access" ? state.revoke : undefined;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -110,31 +118,38 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
     state.resource !== "units" || state.row?.sacrament_meeting_first == null ? ""
       : state.row.sacrament_meeting_first ? "yes" : "no",
   );
-  const [conferenceStart, setConferenceStart] = useState(state.resource === "stake_conferences" ? state.row?.begins_on ?? "" : "");
+  const [conferenceStart, setConferenceStart] = useState(conference?.row?.begins_on ?? "");
   const [hasSubCongregation, setHasSubCongregation] = useState(state.resource === "units" && Boolean(state.row?.has_sub_congregation));
   const [subCongregationLanguage, setSubCongregationLanguage] = useState(
     state.resource === "units" ? state.row?.sub_congregation_language_id ?? "" : "",
   );
   const [level, setLevel] = useState<CallingLevel>(
     (state.resource === "positions" ? state.row?.level ?? state.callingType?.level :
-      state.resource === "calling_types" ? state.row?.level : undefined) ?? "ward",
+      state.resource === "calling_types" ? state.row?.level ?? state.parent?.level : undefined) ?? "ward",
   );
   const [retired, setRetired] = useState(Boolean(state.resource === "positions" && state.row?.retired_on));
   const [newContact, setNewContact] = useState(false);
-  const assignmentLevel = state.resource === "assignments"
-    ? (state.position ? state.position.level : state.callingType.level)
+  const types = new Map(directory.calling_types.map((type) => [type.id, type]));
+  const assignmentType = state.resource === "assignments"
+    ? (state.position ? types.get(state.position.calling_type_id) : state.callingType)
     : undefined;
+  const canMarkFh = Boolean(assignmentType?.parent_calling_type_id);
   const units = new Map(directory.units.map((unit) => [unit.id, unit]));
-  const sortedContacts = [...directory.contacts].sort((a, b) => a.name.localeCompare(b.name));
-  const typeNames = new Map(directory.calling_types.map((type) => [type.id, type.name]));
+  const assignmentContactId = state.resource === "assignments" ? state.row?.contact_id : undefined;
+  const sortedContacts = directory.contacts.filter((person) => !person.focus_type || person.id === assignmentContactId)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const typeNames = new Map(directory.calling_types.map((type) => [type.id, callingPath(type, types)]));
   const languages = [...directory.languages].sort((a, b) => a.name.localeCompare(b.name));
   const hasAssignments = resource === "positions" && directory.assignments.some((assignment) => assignment.position_id === state.row?.id);
   const pastAssignment = state.resource === "assignments" && state.position && (Boolean(state.position.retired_on) ||
     (!state.position.multiple_holders && directory.assignments.some((assignment) => assignment.position_id === state.position.id
       && assignment.id !== state.row?.id && !assignment.released_on)));
-  const lockType = resource === "calling_types" && directory.positions.some((position) => position.calling_type_id === state.row?.id);
+  const lockType = state.resource === "calling_types" && (Boolean(state.parent) ||
+    directory.positions.some((position) => position.calling_type_id === state.row?.id) ||
+    directory.calling_types.some((type) => type.parent_calling_type_id === state.row?.id));
   const lockKind = resource === "units" && (directory.units.some((unit) => unit.parent_id === state.row?.id)
-    || directory.positions.some((position) => position.unit_id === state.row?.id));
+    || directory.positions.some((position) => position.unit_id === state.row?.id)
+    || directory.buildings.some((building) => building.agent_stake_id && building.agent_stake_id === state.row?.id));
 
   async function run(operation: () => Promise<{ error: string | null }>) {
     setBusy(true);
@@ -158,7 +173,15 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
     const optional = (key: string) => value(key) || null;
     let values: object;
     switch (state.resource) {
-      case "contacts": values = { name: value("name"), email: optional("email"), phone: optional("phone") }; break;
+      case "contacts": {
+        const contactDetails = { email: optional("email"), phone: optional("phone") };
+        values = focusType ? {
+          ...contactDetails, focus_type: focusType, first_name: value("first_name"), last_name: value("last_name"),
+          ward_id: value("ward_id"), is_whatsapp: data.has("is_whatsapp"), baptized_on: optional("baptized_on"),
+          helper_number: optional("helper_number"), pid: optional("pid"),
+        } : { ...contactDetails, name: value("name") };
+        break;
+      }
       case "units": {
         const meeting = hasSacramentMeeting(kind);
         const first = optional("sacrament_meeting_first");
@@ -177,14 +200,27 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
         };
         break;
       }
-      case "buildings":
-        values = { address: value("address") };
-        break;
+      case "buildings": {
+        const photo = data.get("photo");
+        if (photo instanceof File && photo.name && (photo.size === 0 || photo.size > buildingPhotoMaxBytes ||
+          !Object.hasOwn(buildingPhotoTypes, photo.type))) {
+          setError("Choose a JPEG, PNG, or WebP picture up to 4 MB.");
+          return;
+        }
+        await run(() => saveBuilding(state.row?.id ?? null, data));
+        return;
+      }
       case "stake_conferences":
-        values = { stake_id: state.stake.id, begins_on: value("begins_on"), ends_on: value("ends_on") };
+      case "ward_conferences":
+        values = {
+          [state.resource === "stake_conferences" ? "stake_id" : "unit_id"]: state.unit.id,
+          begins_on: value("begins_on"), ends_on: value("ends_on"),
+        };
         break;
       case "languages": values = { name: value("name") }; break;
-      case "calling_types": values = { name: value("name"), level }; break;
+      case "calling_types":
+        values = { name: value("name"), level, parent_calling_type_id: optional("parent_calling_type_id") };
+        break;
       case "positions":
         values = {
           unit_id: hasAssignments ? state.row?.unit_id : value("unit_id"),
@@ -196,13 +232,13 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
       case "assignments": {
         const details = {
           sustained_on: optional("sustained_on"), released_on: optional("released_on"),
-          fh_assignment: Boolean(assignmentLevel && supportsFhAssignment(assignmentLevel) && data.has("fh_assignment")),
         };
         if (!state.row) {
           const unitId = state.position ? state.position.unit_id : state.unit.id;
           const callingTypeId = state.position ? state.position.calling_type_id : state.callingType.id;
           await run(() => addCallingHolder({
             unit_id: unitId, calling_type_id: callingTypeId, ...details,
+            fh_assignment: canMarkFh && data.has("fh_assignment"),
             contact_id: newContact ? null : optional("contact_id"),
             new_contact_name: newContact ? optional("name") : null,
             new_contact_phone: newContact ? optional("phone") : null,
@@ -210,20 +246,21 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
           }));
           return;
         }
-        values = { position_id: state.position.id, contact_id: state.row.contact_id, ...details };
+        values = { position_id: state.position.id, contact_id: state.row.contact_id, ...details,
+          ...(canMarkFh ? { fh_assignment: data.has("fh_assignment") } : {}) };
         break;
       }
       case "directory_access": values = { email: value("email") }; break;
     }
-    await run(() => saveRecord(resource, row?.id ?? null, values));
+    await run(() => saveRecord(state.resource, row?.id ?? null, values));
   }
 
   return (
     <Modal title={revoke ? "Revoke access" : resource === "directory_access" ? "Grant access" :
-      row ? `Edit ${labels[resource].toLowerCase()}` : `Add ${labels[resource].toLowerCase()}`} close={() => { if (!busy) close(); }}>
+      row ? `Edit ${recordLabel.toLowerCase()}` : `Add ${recordLabel.toLowerCase()}`} close={() => { if (!busy) close(); }}>
       {confirmDelete ? (
         <div className="modal-body">
-          <p>{revoke ? `Remove directory access for ${revoke}?` : `Permanently delete this ${labels[resource].toLowerCase()}?`}</p>
+          <p>{revoke ? `Remove directory access for ${revoke}?` : `Permanently delete this ${recordLabel.toLowerCase()}?`}</p>
           {error && <p className="notice error" role="alert">{error}</p>}
           <div className="form-actions">
             <button type="button" className="button" disabled={busy} onClick={() => revoke ? close() : setConfirmDelete(false)}>Cancel</button>
@@ -235,7 +272,45 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
         </div>
       ) : (
         <form className="modal-body stack" onSubmit={submit}>
-          {state.resource === "contacts" && <ContactFields contact={state.row} />}
+          {state.resource === "contacts" && <>
+            <label>Person type
+              <select value={focusType} onChange={(event) => setFocusType(event.target.value as FocusType | "")}>
+                {!contact?.focus_type && !ward && <option value="">Directory contact</option>}
+                {focusTypes.map((type) => <option key={type} value={type}>{focusTypeLabels[type]}</option>)}
+              </select>
+            </label>
+            {focusType ? <>
+              <label>First name<input name="first_name" autoComplete="given-name" defaultValue={contact?.first_name ?? ""} maxLength={148} required /></label>
+              <label>Last name<input name="last_name" autoComplete="family-name" defaultValue={contact?.last_name ?? ""} maxLength={148} required /></label>
+              <label>Ward or branch
+                <select name="ward_id" defaultValue={contact?.ward_id ?? ward?.id ?? ""} required>
+                  <option value="">Choose a ward or branch</option>
+                  {directory.units.filter(({ kind }) => hasSacramentMeeting(kind))
+                    .map((unit) => ({ id: unit.id, path: unitPath(unit, units) }))
+                    .sort((a, b) => a.path.localeCompare(b.path))
+                    .map(({ id, path }) => <option key={id} value={id}>{path}</option>)}
+                </select>
+              </label>
+              <label>Date Baptized <span className="optional">optional</span>
+                <input name="baptized_on" type="date" defaultValue={contact?.baptized_on ?? ""} min="0001-01-01" max="9999-12-31" />
+              </label>
+              <label>Phone <span className="optional">optional</span>
+                <input name="phone" type="tel" autoComplete="tel" maxLength={50} defaultValue={contact?.phone ?? ""} />
+              </label>
+              <label className="check">
+                <input name="is_whatsapp" type="checkbox" defaultChecked={contact?.is_whatsapp} /> Uses WhatsApp
+              </label>
+              <label>Email <span className="optional">optional</span>
+                <input name="email" type="email" autoComplete="email" maxLength={254} defaultValue={contact?.email ?? ""} />
+              </label>
+              <label>Helper number <span className="optional">optional</span>
+                <input name="helper_number" type="text" inputMode="numeric" pattern="[0-9]+" defaultValue={contact?.helper_number ?? ""} />
+              </label>
+              <label>PID <span className="optional">optional</span>
+                <input name="pid" type="text" pattern="[A-Za-z0-9]+" defaultValue={contact?.pid ?? ""} />
+              </label>
+            </> : <ContactFields contact={contact} />}
+          </>}
           {state.resource === "units" && <>
             <label>Unit name<input name="name" defaultValue={state.row?.name} maxLength={150} required /></label>
             <label>Unit level<select value={kind} disabled={lockKind} onChange={(event) => setKind(event.target.value as UnitKind)}>
@@ -258,7 +333,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               <select name="building_id" defaultValue={state.row?.building_id ?? ""}>
                 <option value="">Choose a building</option>
                 {[...directory.buildings].sort((a, b) => a.address.localeCompare(b.address)).map((building) =>
-                  <option key={building.id} value={building.id}>{building.address}</option>)}
+                  <option key={building.id} value={building.id}>{formatBuildingAddress(building)}</option>)}
               </select>
             </label>
             {hasSacramentMeeting(kind) && <>
@@ -306,15 +381,46 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             </>}
           </>}
           {state.resource === "buildings" && <>
-            <label>Street address <input name="address" maxLength={300} required defaultValue={state.row?.address} /></label>
+            <label>Street address
+              <input name="address" autoComplete="address-line1" maxLength={300} required defaultValue={state.row?.address} />
+            </label>
+            <label>City
+              <input name="city" autoComplete="address-level2" maxLength={150} required defaultValue={state.row?.city ?? ""} />
+            </label>
+            <div className="building-address-fields">
+              <label>State
+                <input name="state" autoComplete="address-level1" autoCapitalize="characters" pattern="[A-Za-z]{2}"
+                  title="Two-letter state abbreviation" maxLength={2} required defaultValue={state.row?.state ?? "ID"} />
+              </label>
+              <label>ZIP code
+                <input name="zip_code" autoComplete="postal-code" pattern="[0-9]{5}(-[0-9]{4})?"
+                  title="Five digits, or ZIP+4" maxLength={10} required defaultValue={state.row?.zip_code ?? ""} />
+              </label>
+            </div>
+            <label>Agent Stake <span className="optional">optional</span>
+              <select name="agent_stake_id" defaultValue={state.row?.agent_stake_id ?? ""}>
+                <option value="">Choose a stake</option>
+                {directory.units.filter((unit) => unit.kind === "stake")
+                  .map((unit) => ({ id: unit.id, path: unitPath(unit, units) }))
+                  .sort((a, b) => a.path.localeCompare(b.path)).map((stake) =>
+                    <option key={stake.id} value={stake.id}>{stake.path}</option>)}
+              </select>
+            </label>
+            {state.row?.photo_path && <Image className="building-photo-preview" src={buildingPhotoUrl(state.row)}
+              width={480} height={240} alt="Current building picture" unoptimized />}
+            <label>{state.row?.photo_path ? "Replace picture" : "Building picture"} <span className="optional">optional</span>
+              <input name="photo" type="file" accept={Object.keys(buildingPhotoTypes).join(",")}
+                aria-describedby="building-photo-help" />
+              <span className="field-help" id="building-photo-help">JPEG, PNG, or WebP up to 4 MB.</span>
+            </label>
           </>}
-          {state.resource === "stake_conferences" && <>
-            <p>{state.stake.name}</p>
+          {conference && <>
+            <p>{conference.unit.name}</p>
             <label>Begin date
               <input type="date" name="begins_on" value={conferenceStart} onChange={(event) => setConferenceStart(event.target.value)} required />
             </label>
             <label>End date
-              <input type="date" name="ends_on" defaultValue={state.row?.ends_on} min={conferenceStart || undefined} required />
+              <input type="date" name="ends_on" defaultValue={conference.row?.ends_on} min={conferenceStart || undefined} required />
             </label>
           </>}
           {state.resource === "languages" && <label>Language name
@@ -326,15 +432,24 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               {callingLevels.map((value) => <option key={value} value={value}>{callingLevelLabel(value)}</option>)}
             </select></label>
           )}
-          {state.resource === "calling_types" && <label>Calling title
-            <input name="name" defaultValue={state.row?.name} maxLength={150} required />
-          </label>}
+          {state.resource === "calling_types" && <>
+            <label>Calling title<input name="name" defaultValue={state.row?.name} maxLength={150} required /></label>
+            {supportsCallingHierarchy(level) && <label>Parent calling
+              <select key={level} name="parent_calling_type_id"
+                defaultValue={level === state.row?.level ? state.row.parent_calling_type_id ?? "" : state.parent?.id ?? ""}>
+                <option value="">Top-level calling</option>
+                {directory.calling_types.filter((type) => type.level === level && type.id !== state.row?.id &&
+                  !callingAncestors(type, types).some((ancestor) => ancestor.id === state.row?.id)).map((type) =>
+                  <option key={type.id} value={type.id}>{typeNames.get(type.id)}</option>)}
+              </select>
+            </label>}
+          </>}
           {state.resource === "positions" && <>
             <label>Calling type<select key={`type-${level}`} name="calling_type_id" required disabled={hasAssignments}
               defaultValue={state.row?.calling_type_id ?? state.callingType?.id ?? ""}>
               <option value="">Choose a calling type</option>
               {directory.calling_types.filter((type) => type.level === level).map((type) =>
-                <option key={type.id} value={type.id}>{type.name}</option>)}
+                <option key={type.id} value={type.id}>{typeNames.get(type.id)}</option>)}
             </select></label>
             <label>Unit<select key={`unit-${level}`} name="unit_id" required disabled={hasAssignments}
               defaultValue={state.row?.unit_id ?? ""}>
@@ -365,7 +480,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
           {state.resource === "assignments" && <>
             <p>{state.position
               ? `${typeNames.get(state.position.calling_type_id)} · ${units.get(state.position.unit_id)?.name}`
-              : `${state.callingType.name} · ${state.unit.name}`}</p>
+              : `${callingPath(state.callingType, types)} · ${state.unit.name}`}</p>
             <label>Person<select name="contact_id" defaultValue={state.row?.contact_id ?? ""} disabled={Boolean(state.row)} required
               onChange={(event) => setNewContact(event.target.value === "new")}>
               <option value="">Choose a contact</option>
@@ -375,7 +490,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               </option>)}
             </select></label>
             {newContact && <ContactFields />}
-            {assignmentLevel && supportsFhAssignment(assignmentLevel) && <label className="check">
+            {canMarkFh && <label className="check">
               <input name="fh_assignment" type="checkbox" defaultChecked={state.row?.fh_assignment} />
               FH Assignment
             </label>}

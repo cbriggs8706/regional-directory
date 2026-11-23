@@ -1,10 +1,14 @@
 "use client";
 
 import { useRef, useState, type FormEvent } from "react";
-import { Building2, ChevronDown, ExternalLink, Pencil, Plus } from "lucide-react";
-import { hasSacramentMeeting, unitLabels, unitPath, type Building, type Language, type StakeConference, type Unit } from "../lib/directory";
+import Image from "next/image";
+import Link from "next/link";
+import { Building2, ChevronDown, Eye, Pencil, Plus } from "lucide-react";
+import { buildingPhotoUrl, formatBuildingAddress, hasSacramentMeeting, unitLabels, unitPath, type Building, type Language, type StakeConference, type Unit } from "../lib/directory";
 import { addStakeUnits } from "./actions";
 import { Modal, type EditorState } from "./editor";
+import { UnitConferences } from "./unit-conferences";
+import { UnitFacts } from "./unit-facts";
 
 type UnitTreeProps = {
   childrenByParent: Map<string, Unit[]>;
@@ -12,102 +16,65 @@ type UnitTreeProps = {
   languageNames: Map<string, string>;
   buildingAddresses: Map<string, string>;
   edit: (state: EditorState) => void;
-  openCallings: (unit: Unit) => void;
+  browsePath: Set<string>;
 };
 
-const meetingTimeFormat = new Intl.DateTimeFormat("en-US", { timeStyle: "short", timeZone: "UTC" });
-const conferenceDateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
-
-function formatMeetingTime(time: string) {
-  return meetingTimeFormat.format(new Date(`2000-01-01T${time.slice(0, 5)}:00Z`));
+function ViewUnitLink({ unit }: { unit: Unit }) {
+  return <Link href={`/units/${unit.id}`} className="icon-button unit-view-link" prefetch={false}
+    aria-label={`View ${unit.name}`} title={`View ${unit.name}`}><Eye size={19} aria-hidden /></Link>;
 }
 
-function UnitNode({ unit, childrenByParent, conferencesByStake, languageNames, buildingAddresses, edit, openCallings }: UnitTreeProps & { unit: Unit }) {
-  const [expanded, setExpanded] = useState(unit.kind === "council");
+function UnitNode({ unit, childrenByParent, conferencesByStake, languageNames, buildingAddresses, edit, browsePath }: UnitTreeProps & { unit: Unit }) {
+  const [expanded, setExpanded] = useState(browsePath.has(unit.id));
   const [addingUnits, setAddingUnits] = useState(false);
   const [addResult, setAddResult] = useState("");
   const children = childrenByParent.get(unit.id) ?? [];
   const childListId = `unit-children-${unit.id}`;
   const leaf = hasSacramentMeeting(unit.kind);
   const isStake = unit.kind === "stake";
-  const canExpand = children.length > 0 || isStake;
+  const canExpand = unit.kind === "council" || isStake || children.length > 0;
   const conferences = conferencesByStake.get(unit.id) ?? [];
   const address = unit.building_id ? buildingAddresses.get(unit.building_id) : undefined;
   const childType = unit.kind === "council" ? "stake" : "unit";
-  const heading = <>
-    <strong>{unit.name}</strong>
-    <small>{unitLabels[unit.kind]}{!leaf && ` · ${children.length} ${childType}${children.length === 1 ? "" : "s"}`}</small>
-  </>;
-
+  const title = (
+    <span className="unit-node-title">
+      <strong>{unit.name}</strong>
+      <small>{unitLabels[unit.kind]}{!leaf && ` · ${children.length} ${childType}${children.length === 1 ? "" : "s"}`}</small>
+      <UnitFacts unit={unit} languageNames={languageNames} address={address} />
+    </span>
+  );
   return (
     <li className={`unit-node unit-node-${unit.kind}`}>
       <div className="unit-node-row">
-        {canExpand ? (
-          <button type="button" className="unit-toggle" aria-expanded={expanded} aria-controls={childListId}
-            onClick={() => setExpanded((open) => !open)}>
-            <ChevronDown size={17} aria-hidden />
-            <span className="unit-node-title">{heading}</span>
+        {canExpand
+          ? <button type="button" className="unit-card unit-toggle" aria-expanded={expanded}
+            aria-controls={childListId} onClick={() => setExpanded((open) => !open)}>
+            {title}<ChevronDown size={20} aria-hidden />
           </button>
-        ) : <div className="unit-node-title unit-node-static">{heading}</div>}
-        {isStake && <button type="button" className="text-button unit-add-children"
+          : <Link href={`/units/${unit.id}`} className="unit-card" prefetch={false}>
+            {title}<Eye size={19} aria-hidden />
+          </Link>}
+        <div className="unit-card-actions">
+          {canExpand && <ViewUnitLink unit={unit} />}
+          <button type="button" className="icon-button" aria-label={`Edit ${unit.name}`}
+            onClick={() => edit({ resource: "units", row: unit })}><Pencil size={17} aria-hidden /></button>
+        </div>
+      </div>
+      {addResult && <p className="notice unit-add-result" role="status">{addResult}</p>}
+      {canExpand && <div id={childListId} hidden={!expanded}>
+        {isStake && <div className="unit-stake-tools"><button type="button" className="button"
           aria-label={`Add units to ${unit.name}`} onClick={() => {
             setAddResult("");
             setAddingUnits(true);
           }}>
-          <Plus size={15} aria-hidden />Add units
-        </button>}
-        <button type="button" className="icon-button" aria-label={`Edit ${unit.name}`}
-          onClick={() => edit({ resource: "units", row: unit })}><Pencil size={17} /></button>
-      </div>
-      {addResult && <p className="notice unit-add-result" role="status">{addResult}</p>}
-      {(leaf || isStake || unit.website_url || address) && <div className="unit-details">
-        <div className="chips">
-          {unit.language_id && <span className="chip">{languageNames.get(unit.language_id)}</span>}
-          {unit.has_sub_congregation && unit.sub_congregation_language_id && <span className="chip">
-            {languageNames.get(unit.sub_congregation_language_id)} sub-congregation
-          </span>}
-          {unit.sacrament_meeting_first === false && unit.first_meeting_time && <span className="chip">
-            First meeting at {formatMeetingTime(unit.first_meeting_time)}
-          </span>}
-          {unit.sacrament_meeting_time && <span className="chip">Sacrament at {formatMeetingTime(unit.sacrament_meeting_time)}</span>}
-          {leaf && unit.sacrament_meeting_first !== null && <span className="chip">
-            {unit.sacrament_meeting_first ? "Sacrament first" : "Sacrament after another meeting"}
-          </span>}
-          {unit.council_meeting_time && <span className="chip">Council at {formatMeetingTime(unit.council_meeting_time)}</span>}
-          {unit.website_url && <a className="chip unit-website" href={unit.website_url} target="_blank" rel="noopener noreferrer"
-            aria-label={`Website for ${unit.name} (opens in a new tab)`}>
-            Website <ExternalLink size={14} aria-hidden />
-          </a>}
-        </div>
-        {address && <small className="unit-notes">{address}</small>}
-        {unit.notes && <small className="unit-notes">{unit.notes}</small>}
-        {(isStake || leaf) && <button className="text-button" aria-label={`View callings for ${unit.name}`}
-          onClick={() => openCallings(unit)}>View callings</button>}
-      </div>}
-      {canExpand && <div id={childListId} hidden={!expanded}>
-        {isStake && <section className="stake-conferences" aria-labelledby={`conference-heading-${unit.id}`}>
-          <div className="stake-conferences-heading">
-            <h2 id={`conference-heading-${unit.id}`}>Stake conferences</h2>
-            <button className="text-button" onClick={() => edit({ resource: "stake_conferences", stake: unit })}>
-              <Plus size={15} aria-hidden />Add conference
-            </button>
-          </div>
-          {conferences.length > 0 && <ul className="management-list">
-            {conferences.map((conference) => {
-              const dates = conferenceDateFormat.formatRange(new Date(conference.begins_on), new Date(conference.ends_on));
-              return <li key={conference.id}>
-                <div>{dates}</div>
-                <button className="icon-button" aria-label={`Edit stake conference ${dates}`}
-                  onClick={() => edit({ resource: "stake_conferences", stake: unit, row: conference })}><Pencil size={16} /></button>
-              </li>;
-            })}
-          </ul>}
-        </section>}
-        {children.length > 0 && <ul className="unit-children">
+          <Plus size={16} aria-hidden />Add units
+        </button></div>}
+        {isStake && <UnitConferences unit={unit} conferences={conferences} edit={edit} />}
+        {children.length > 0 ? <ul className="unit-children">
           {children.map((child) => <UnitNode key={child.id} unit={child} childrenByParent={childrenByParent}
             conferencesByStake={conferencesByStake} languageNames={languageNames} buildingAddresses={buildingAddresses}
-            edit={edit} openCallings={openCallings} />)}
-        </ul>}
+            edit={edit} browsePath={browsePath} />)}
+        </ul> : <p className="muted unit-stake-tools">No {childType}s yet.</p>}
       </div>}
       {addingUnits && <AddStakeUnits stake={unit} close={() => setAddingUnits(false)} onSaved={(added, skipped) => {
         setExpanded(true);
@@ -159,10 +126,10 @@ function AddStakeUnits({ stake, close, onSaved }: {
   );
 }
 
-export function UnitsView({ units, buildings, languages, conferences, edit, openCallings }: {
+export function UnitsView({ units, buildings, languages, conferences, edit, browseUnitId }: {
   units: Unit[]; languages: Language[]; conferences: StakeConference[]; edit: UnitTreeProps["edit"];
   buildings: Building[];
-  openCallings: UnitTreeProps["openCallings"];
+  browseUnitId: string;
 }) {
   const [regionId, setRegionId] = useState("");
   const languageSettings = useRef<HTMLDetailsElement>(null);
@@ -171,7 +138,7 @@ export function UnitsView({ units, buildings, languages, conferences, edit, open
   const childrenByParent = new Map<string, Unit[]>();
   const conferencesByStake = new Map<string, StakeConference[]>();
   const languageNames = new Map(languages.map((language) => [language.id, language.name]));
-  const buildingAddresses = new Map(buildings.map((building) => [building.id, building.address]));
+  const buildingAddresses = new Map(buildings.map((building) => [building.id, formatBuildingAddress(building)]));
   const unitsById = new Map(units.map((unit) => [unit.id, unit]));
 
   for (const unit of [...units].sort((a, b) => a.name.localeCompare(b.name))) {
@@ -183,13 +150,22 @@ export function UnitsView({ units, buildings, languages, conferences, edit, open
       childrenByParent.set(unit.parent_id, siblings);
     }
   }
-  for (const conference of [...conferences].sort((a, b) => b.begins_on.localeCompare(a.begins_on))) {
+  for (const conference of conferences) {
     const dates = conferencesByStake.get(conference.stake_id) ?? [];
     dates.push(conference);
     conferencesByStake.set(conference.stake_id, dates);
   }
 
-  const region = regions.find((entry) => entry.id === regionId) ?? regions[0];
+  const browsePath = new Set<string>();
+  let ancestor = unitsById.get(browseUnitId);
+  let browseRegionId = "";
+  while (ancestor && !browsePath.has(ancestor.id)) {
+    browsePath.add(ancestor.id);
+    if (ancestor.kind === "region") browseRegionId = ancestor.id;
+    ancestor = unitsById.get(ancestor.parent_id ?? "");
+  }
+
+  const region = regions.find((entry) => entry.id === (regionId || browseRegionId)) ?? regions[0];
   const councils = region ? childrenByParent.get(region.id) ?? [] : [];
 
   function openSettings(settings: HTMLDetailsElement | null) {
@@ -209,23 +185,31 @@ export function UnitsView({ units, buildings, languages, conferences, edit, open
       </div>
       {region && <div className="unit-region">
         <div className="unit-region-name">
-          {regions.length > 1 ? <label>Region
+          {regions.length > 1 && <label>Browse region
             <select value={region.id} onChange={(event) => setRegionId(event.target.value)}>
               {regions.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
             </select>
-          </label> : <div><small>Region</small><strong>{region.name}</strong></div>}
-          <button className="icon-button" aria-label={`Edit region ${region.name}`}
-            onClick={() => edit({ resource: "units", row: region })}><Pencil size={17} /></button>
+          </label>}
+          <div className="unit-node-row">
+            <Link href={`/units/${region.id}`} className="unit-card" prefetch={false}>
+              <span className="unit-node-title"><strong>{region.name}</strong><small>Region</small></span>
+              <Eye size={19} aria-hidden />
+            </Link>
+            <div className="unit-card-actions">
+              <button className="icon-button" aria-label={`Edit region ${region.name}`}
+                onClick={() => edit({ resource: "units", row: region })}><Pencil size={17} aria-hidden /></button>
+            </div>
+          </div>
         </div>
         <div className="toolbar">
-          <button className="text-button" onClick={() => openSettings(buildingSettings.current)}>Manage buildings</button>
-          <button className="text-button" onClick={() => openSettings(languageSettings.current)}>Manage languages</button>
+          <button className="button" onClick={() => openSettings(buildingSettings.current)}>Manage buildings</button>
+          <button className="button" onClick={() => openSettings(languageSettings.current)}>Manage languages</button>
         </div>
       </div>}
       {region && councils.length > 0 ? <ul className="unit-councils" aria-label="Coordinating councils" key={region.id}>
         {councils.map((unit) => <UnitNode key={unit.id} unit={unit} childrenByParent={childrenByParent}
           conferencesByStake={conferencesByStake} languageNames={languageNames} buildingAddresses={buildingAddresses}
-          edit={edit} openCallings={openCallings} />)}
+          edit={edit} browsePath={browsePath} />)}
       </ul> : <div className="panel empty">
         <span><Building2 size={25} aria-hidden /></span>
         <h2>{region ? "No coordinating councils yet" : "No region yet"}</h2>
@@ -242,11 +226,14 @@ export function UnitsView({ units, buildings, languages, conferences, edit, open
           {buildings.length > 0 && <ul className="panel management-list">
             {[...buildings].sort((a, b) => a.address.localeCompare(b.address)).map((building) => (
               <li key={building.id}>
-                <div><strong>{building.address}</strong>
+                {building.photo_path && <Image className="building-photo-thumbnail" src={buildingPhotoUrl(building)}
+                  width={64} height={52} alt="" unoptimized />}
+                <div><strong>{buildingAddresses.get(building.id)}</strong>
+                  {building.agent_stake_id && <small>Agent Stake · {unitsById.get(building.agent_stake_id)?.name}</small>}
                   {units.filter((unit) => unit.building_id === building.id).map((unit) =>
                     <small key={unit.id}>{unitPath(unit, unitsById)}</small>)}
                 </div>
-                <button className="icon-button" aria-label={`Edit building at ${building.address}`}
+                <button className="icon-button" aria-label={`Edit building at ${buildingAddresses.get(building.id)}`}
                   onClick={() => edit({ resource: "buildings", row: building })}><Pencil size={17} /></button>
               </li>
             ))}

@@ -1,8 +1,7 @@
 import { BookOpen, LockKeyhole } from "lucide-react";
 import { signIn, signOut } from "./actions";
-import { DirectoryApp } from "./directory-app";
+import { DirectoryPage } from "./directory-page";
 import { getViewer, supabaseSettings } from "../lib/supabase";
-import type { Directory } from "../lib/directory";
 
 export const dynamic = "force-dynamic";
 
@@ -37,32 +36,5 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ a
     );
   }
 
-  const { client, role, user } = viewer;
-  const tables = ["units", "buildings", "stake_conferences", "languages", "contacts", "calling_types", "calling_names", "positions", "assignments"] as const;
-  const entries = await Promise.all(tables.map(async (table) => {
-    const records: object[] = [];
-    for (let start = 0; ; start += 500) {
-      const { data, error } = await client.from(table).select("*").order("id").range(start, start + 499);
-      if (error) throw new Error(`Could not load ${table}.`);
-      records.push(...data);
-      if (data.length < 500) return [table, records] as const;
-    }
-  }));
-  const access = role === "admin" ? await client.from("directory_access").select("email,is_admin").order("email") : null;
-  if (access?.error) throw new Error("Could not load directory access.");
-  const recent = await client.from("email_dispatches")
-    .select("id,created_at,subject,recipients,accepted_batches")
-    .gt("created_at", new Date(Date.now() - 23 * 60 * 60 * 1000).toISOString())
-    .order("created_at", { ascending: false });
-  if (recent.error) throw new Error("Could not load pending email.");
-  const pending = recent.data.flatMap((draft) => {
-    const total = draft.recipients.length;
-    const sent = (draft.accepted_batches as number[]).reduce((sum, batch) => sum + Math.min(100, total - 100 * batch), 0);
-    return sent === total ? [] : [{ id: draft.id as string, subject: draft.subject as string, sent, total }];
-  });
-  const directory = { ...Object.fromEntries(entries), directory_access: access?.data ?? [] } as Directory;
-
-  return <DirectoryApp directory={directory} admin={role === "admin"} email={user.email ?? ""}
-    userId={user.id}
-    mailReady={Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM)} pending={pending} />;
+  return <DirectoryPage viewer={viewer} />;
 }

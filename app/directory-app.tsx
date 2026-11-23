@@ -1,27 +1,38 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useRef, useState, type FormEvent } from "react";
 import {
-  BookOpen, Building2, CalendarDays, ChevronDown, Copy, Filter, LogOut, Mail, Pencil, Plus, Search, ShieldCheck, Tags, Users, X,
+  BookOpen, Building2, CalendarDays, ChevronDown, Copy, Ellipsis, Filter, House, LogOut, Mail, Pencil, Plus, Search, ShieldCheck, Tags, Users, X,
 } from "lucide-react";
 import { sendEmail, signOut, type SendResult } from "./actions";
 import { Editor, Modal, type EditorState } from "./editor";
 import { UnitsView } from "./units-view";
-import { UnitCallings } from "./unit-callings";
+import { UnitPageContent } from "./unit-page-content";
 import { CallingGroups } from "./calling-groups";
 import { VisitPlanner } from "./visit-planner";
+import { FamilyHistoryDashboard } from "./family-history-dashboard";
+import type { FamilyHistoryReport } from "../lib/family-history";
+import { focusTypeLabels, type FocusActivityData } from "../lib/focus-people";
+import type { UnitJournalData } from "../lib/unit-journal";
 import {
-  callingLevelLabel, normalizeEmail, unitLabels, unitPath, type Assignment, type Contact, type Directory,
+  callingAncestors, callingLevelLabel, callingPath, normalizeEmail, supportsCallingHierarchy, unitLabels, unitPath,
+  type Assignment, type Contact, type Directory,
 } from "../lib/directory";
 
-const tabs = [
+const primarySections = [
+  { id: "dashboard", label: "Home", description: "Dashboard", Icon: House },
   { id: "people", label: "People", Icon: Users },
-  { id: "callings", label: "Callings", Icon: Tags },
   { id: "units", label: "Units", Icon: Building2 },
-  { id: "visits", label: "Visits", Icon: CalendarDays },
-  { id: "access", label: "Access", Icon: ShieldCheck },
+  { id: "visits", label: "Calendar", description: "Visits", Icon: CalendarDays },
 ] as const;
-type Tab = typeof tabs[number]["id"];
+const sections = [
+  ...primarySections,
+  { id: "callings", label: "Callings", Icon: Tags },
+  { id: "access", label: "Admin", description: "Manage access", Icon: ShieldCheck },
+] as const;
+type Tab = typeof sections[number]["id"];
 type Pending = { id: string; subject: string; sent: number; total: number };
 
 function formatDate(date: string) {
@@ -32,14 +43,23 @@ function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => Array.from(word)[0]).join("").toUpperCase();
 }
 
-export function DirectoryApp({ directory, admin, email, userId, mailReady, pending }: {
-  directory: Directory; admin: boolean; email: string; userId: string; mailReady: boolean; pending: Pending[];
+export function DirectoryApp({ unitId, directory, admin, email, userId, mailReady, pending, familyHistory, journal, focusActivity }: {
+  unitId?: string; directory: Directory; admin: boolean; email: string; userId: string; mailReady: boolean; pending: Pending[];
+  familyHistory: { reports: FamilyHistoryReport[]; loadError: string | null; currentMonth: string };
+  journal: UnitJournalData | null;
+  focusActivity: FocusActivityData | null;
 }) {
-  const [tab, setTab] = useState<Tab>("people");
+  const router = useRouter();
+  const params = useSearchParams();
+  const requestedTab = params.get("tab");
+  const tab = unitId ? "units" : sections.find(({ id }) =>
+    id === requestedTab && (id !== "access" || admin))?.id ?? "dashboard";
+  const browseUnitId = params.get("unit") ?? "";
+  const [moreOpen, setMoreOpen] = useState(false);
+  const content = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
   const [callingFilter, setCallingFilter] = useState<string[]>([]);
   const [unitFilter, setUnitFilter] = useState("");
-  const [callingUnitId, setCallingUnitId] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [compose, setCompose] = useState(false);
@@ -49,7 +69,7 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
   const [dismissed, setDismissed] = useState<string[]>([]);
 
   const units = new Map(directory.units.map((unit) => [unit.id, unit]));
-  const callingUnit = units.get(callingUnitId);
+  const detailUnit = unitId ? units.get(unitId) : undefined;
   const people = new Map(directory.contacts.map((contact) => [contact.id, contact]));
   const types = new Map(directory.calling_types.map((type) => [type.id, type]));
   const positions = new Map(directory.positions.map((position) => [position.id, position]));
@@ -83,6 +103,7 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
   const visible = sortedPeople.filter((person) => {
     if (needle && ![person.name, person.email, person.phone].some((value) => value?.toLowerCase().includes(needle))) return false;
     if (!unitFilter && !callingFilter.length) return true;
+    if (person.focus_type) return !callingFilter.length && scopedUnitIds.has(person.ward_id ?? "");
     return active.get(person.id)?.some((assignment) => {
       const position = positions.get(assignment.position_id);
       return position && (!unitFilter || scopedUnitIds.has(position.unit_id))
@@ -97,6 +118,16 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
   const addressList = addresses.join(", ");
   const emailable = visible.filter((person) => person.email);
   const pendingMail = pending.filter((entry) => !dismissed.includes(entry.id));
+
+  function navigate(next: Tab) {
+    setMoreOpen(false);
+    if (next === tab && !unitId) return;
+    const href = next === "dashboard" ? "/" : `/?tab=${next}`;
+    const destination = unitId && next === "units" ? `${href}&unit=${unitId}` : href;
+    if (unitId) router.push(destination);
+    else window.history.pushState(null, "", destination);
+    content.current?.scrollTo({ top: 0 });
+  }
 
   function changeSelected(ids: string[], enabled: boolean) {
     setCopiedAddresses("");
@@ -118,17 +149,19 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
 
   function assignmentLine(assignment: Assignment) {
     const position = positions.get(assignment.position_id);
-    const currentTitle = position && types.get(position.calling_type_id)?.name;
+    const current = position && types.get(position.calling_type_id);
+    const currentTitle = current && callingPath(current, types);
     return { title: currentTitle ?? assignment.calling_name, unit: position && units.get(position.unit_id)?.name };
   }
 
   return (
-    <>
+    <div className={tab === "units" ? "directory-layout unit-workspace" : "directory-layout"}>
+      <div className="directory-content" ref={content}>
       <header className="site-header">
         <div className="shell header-inner">
-          <button className="brand" onClick={() => setTab("people")}><span className="brand-icon"><BookOpen size={22} aria-hidden /></span>
+          <div className="brand"><span className="brand-icon"><BookOpen size={22} aria-hidden /></span>
             <span>Regional Directory</span>
-          </button>
+          </div>
           <div className="account">
             {mailReady && <button className="button header-email" onClick={() => setCompose(true)}>
               <Mail size={17} aria-hidden /><span>Email</span>
@@ -140,21 +173,16 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
       </header>
 
       <main className="shell workspace">
-        <nav className="tabs" aria-label="Directory sections">
-          {tabs.filter((item) => item.id !== "access" || admin).map(({ id, label, Icon }) => (
-            <button key={id} className={id === tab ? "active" : ""} aria-current={id === tab ? "page" : undefined} onClick={() => setTab(id)}>
-              <Icon size={17} aria-hidden />{label}
-            </button>
-          ))}
-        </nav>
         {message && <div className="notice status-line" role="status">{message}
           <button className="icon-button" aria-label="Dismiss status" onClick={() => setMessage("")}><X size={16} /></button>
         </div>}
 
+        {tab === "dashboard" && <FamilyHistoryDashboard units={directory.units} {...familyHistory} />}
+
         {tab === "people" && <section aria-labelledby="people-heading">
           <div className="section-heading">
-            <div><h1 id="people-heading">People</h1><p>Find contacts by name, calling, or unit.</p></div>
-            <button className="button primary" onClick={() => setEditor({ resource: "contacts" })}><Plus size={18} aria-hidden />Add contact</button>
+            <div><h1 id="people-heading">People</h1><p>Find people by name, calling, or unit.</p></div>
+            <button className="button primary" onClick={() => setEditor({ resource: "contacts" })}><Plus size={18} aria-hidden />Add person</button>
           </div>
 
           <div className="panel">
@@ -173,7 +201,7 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
                   {sortedTypes.length ? sortedTypes.map((type) => <label key={type.id} className="check">
                     <input type="checkbox" checked={callingFilter.includes(type.id)} onChange={(event) =>
                       setCallingFilter((prev) => event.target.checked ? [...prev, type.id] : prev.filter((id) => id !== type.id))} />
-                    <span>{type.name}<small>{callingLevelLabel(type.level)}</small></span>
+                    <span>{type.name}<small>{[callingLevelLabel(type.level), ...callingAncestors(type, types).map((entry) => entry.name)].join(" · ")}</small></span>
                   </label>) : <p className="muted">No callings yet.</p>}
                   <button className="text-button" onClick={(event) => {
                     const filter = event.currentTarget.closest("details");
@@ -213,10 +241,16 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
                       <strong>{person.name}</strong>
                       {person.email && <span>{person.email}</span>}
                       {person.phone && <a href={`tel:${person.phone}`}>{person.phone}</a>}
-                      <div className="chips">{active.get(person.id)?.map((assignment) => {
-                        const { title, unit } = assignmentLine(assignment);
-                        return <span className="chip" key={assignment.id}>{title} · {unit}</span>;
-                      })}</div>
+                      <div className="chips">
+                        {person.focus_type && <span className="chip">{focusTypeLabels[person.focus_type]}</span>}
+                        {person.focus_type && person.ward_id && <Link className="chip" href={`/units/${person.ward_id}?section=focus`}>
+                          {units.get(person.ward_id)?.name}
+                        </Link>}
+                        {active.get(person.id)?.map((assignment) => {
+                          const { title, unit } = assignmentLine(assignment);
+                          return <span className="chip" key={assignment.id}>{title} · {unit}</span>;
+                        })}
+                      </div>
                     </div>
                     <button className="icon-button" aria-label={`Edit ${person.name}`} onClick={() => setEditor({ resource: "contacts", row: person })}>
                       <Pencil size={17} />
@@ -243,6 +277,9 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
                   {names.length > 0 && <p className="muted">Previous titles: {names.map((name) => `${name.previous_name} (changed ${formatDate(name.changed_at)})`).join("; ")}</p>}
                   <div className="toolbar">
                     <button className="button" onClick={() => setEditor({ resource: "calling_types", row: type })}><Pencil size={15} aria-hidden />Edit title</button>
+                    {supportsCallingHierarchy(type.level) && <button className="button" onClick={() => setEditor({ resource: "calling_types", parent: type })}>
+                      <Plus size={16} aria-hidden />Add child calling
+                    </button>}
                     <button className="button" onClick={() => setEditor({ resource: "positions", callingType: type })}><Plus size={16} aria-hidden />Add to unit</button>
                   </div>
                   {callingPositions.map((position) => {
@@ -269,7 +306,7 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
                               <div><strong>{name}</strong><small>{assignment.released_on ? `Released ${formatDate(assignment.released_on)}` : "Current"}
                                 {assignment.sustained_on && ` · Sustained ${formatDate(assignment.sustained_on)}`}
                                 {assignment.calling_name !== type.name && ` · Assigned as ${assignment.calling_name}`}</small>
-                                {assignment.fh_assignment && <span className="chip">FH Assignment</span>}
+                                {type.parent_calling_type_id && assignment.fh_assignment && <span className="chip">FH Assignment</span>}
                               </div>
                               <button className="button" aria-label={`Edit assignment for ${name}`}
                                 onClick={() => setEditor({ resource: "assignments", position, row: assignment })}>
@@ -290,14 +327,10 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
           }} />
         </section>}
 
-        {tab === "units" && <>
-          <div hidden={Boolean(callingUnit)}>
-            <UnitsView units={directory.units} buildings={directory.buildings} languages={directory.languages} conferences={directory.stake_conferences}
-              edit={setEditor} openCallings={(unit) => setCallingUnitId(unit.id)} />
-          </div>
-          {callingUnit && <UnitCallings key={callingUnit.id} unit={callingUnit} directory={directory}
-            edit={setEditor} close={() => setCallingUnitId("")} />}
-        </>}
+        {tab === "units" && (detailUnit
+          ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} familyHistory={familyHistory} journal={journal} focusActivity={focusActivity} />
+          : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} units={directory.units} buildings={directory.buildings}
+              languages={directory.languages} conferences={directory.stake_conferences} edit={setEditor} />)}
 
         {tab === "visits" && <VisitPlanner directory={directory} userId={userId} />}
 
@@ -312,24 +345,49 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
           </ul></div>
         </section>}
       </main>
+      </div>
 
-      {recipientCount > 0 && <aside className="selection-bar" aria-label="Email selection">
-        <div className="shell selection-inner">
-          <div className="selection-summary">
-            <strong role="status">{addressList === copiedAddresses
-              ? `Copied ${recipientCount} ${recipientCount === 1 ? "address" : "addresses"}`
-              : `${recipientCount} ${recipientCount === 1 ? "recipient" : "recipients"} selected`}</strong>
-            <button className="text-button" onClick={() => {
-              setSelected(new Set());
-              setCopiedAddresses("");
-            }}>Clear selection</button>
+      <footer className="directory-footer">
+        {recipientCount > 0 && <aside className="selection-bar" aria-label="Email selection">
+          <div className="shell selection-inner">
+            <div className="selection-summary">
+              <strong role="status">{addressList === copiedAddresses
+                ? `Copied ${recipientCount} ${recipientCount === 1 ? "address" : "addresses"}`
+                : `${recipientCount} ${recipientCount === 1 ? "recipient" : "recipients"} selected`}</strong>
+              <button className="text-button" onClick={() => {
+                setSelected(new Set());
+                setCopiedAddresses("");
+              }}>Clear selection</button>
+            </div>
+            <div className="selection-actions">
+              <button className="button primary" onClick={copyAddresses}><Copy size={17} aria-hidden />Copy email addresses</button>
+              {mailReady && <button className="button" onClick={() => setCompose(true)}><Mail size={17} aria-hidden />Compose email</button>}
+            </div>
           </div>
-          <div className="selection-actions">
-            <button className="button primary" onClick={copyAddresses}><Copy size={17} aria-hidden />Copy email addresses</button>
-            {mailReady && <button className="button" onClick={() => setCompose(true)}><Mail size={17} aria-hidden />Compose email</button>}
-          </div>
-        </div>
-      </aside>}
+        </aside>}
+        <nav className="shell footer-nav" aria-label="Directory sections">
+          {primarySections.map(({ id, label, Icon }) => (
+            <button key={id} type="button" aria-current={id === tab ? "page" : undefined} onClick={() => navigate(id)}>
+              <Icon size={22} aria-hidden />{label}
+            </button>
+          ))}
+          <button type="button" aria-haspopup="dialog" aria-expanded={moreOpen} data-active={tab === "callings" || tab === "access"}
+            onClick={() => setMoreOpen(true)}>
+            <Ellipsis size={22} aria-hidden />More
+          </button>
+        </nav>
+      </footer>
+      {moreOpen && <Modal title="More" close={() => setMoreOpen(false)}>
+        <nav className="modal-body more-nav" aria-label="All directory sections">
+          {sections.filter(({ id }) => id !== "access" || admin).map((section) => {
+            const { id, label, Icon } = section;
+            return <button key={id} type="button" aria-current={id === tab ? "page" : undefined} onClick={() => navigate(id)}>
+              <Icon size={20} aria-hidden />
+              <span>{label}{"description" in section && <small>{section.description}</small>}</span>
+            </button>;
+          })}
+        </nav>
+      </Modal>}
       {manualCopy && <Modal title="Copy email addresses" close={() => setManualCopy("")}>
         <div className="modal-body stack">
           <p>Copy the addresses below, then paste them into Gmail.</p>
@@ -350,12 +408,13 @@ export function DirectoryApp({ directory, admin, email, userId, mailReady, pendi
           setCompose(false);
           setMessage(`Resend accepted ${result.sent} ${result.sent === 1 ? "email" : "emails"}.`);
         }} />}
-    </>
+    </div>
   );
 }
 
 function Compose({ contacts, pending, ready, count, close, remove, finish }: {
-  contacts: Contact[]; pending: Pending[]; ready: boolean; count: number; close: (clearSelection: boolean) => void; remove: (id: string) => void;
+  contacts: Contact[]; pending: Pending[];
+ ready: boolean; count: number; close: (clearSelection: boolean) => void; remove: (id: string) => void;
   finish: (result: SendResult, id: string, newDraft: boolean) => void;
 }) {
   const [local, setLocal] = useState<{ id: string; subject: string; sent?: number; total: number } | null>(null);

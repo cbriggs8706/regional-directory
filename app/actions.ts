@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { callingLevels, normalizeEmail } from "../lib/directory";
+import { buildingPhotoMaxBytes, buildingPhotoTypes, callingLevels, normalizeEmail } from "../lib/directory";
+import { focusTypes } from "../lib/focus-people";
 import { createDirectoryClient, getViewer } from "../lib/supabase";
 
 export async function signIn() {
@@ -29,6 +30,8 @@ const email = z.string().trim().toLowerCase().max(254).pipe(z.email());
 const phone = z.string().trim().max(50).nullable();
 const uuid = z.uuid();
 const date = z.iso.date().nullable();
+const conferenceDates = { begins_on: z.iso.date(), ends_on: z.iso.date() };
+const validConferenceDates = ({ begins_on, ends_on }: { begins_on: string; ends_on: string }) => ends_on >= begins_on;
 const meetingTime = z.iso.time({ precision: -1 }).nullable().optional();
 const schemas = {
   units: z.object({
@@ -46,12 +49,27 @@ const schemas = {
     council_meeting_time: meetingTime,
     notes: z.string().trim().max(2000).nullable().optional(),
   }),
-  buildings: z.object({ address: z.string().trim().min(1).max(300) }),
-  stake_conferences: z.object({ stake_id: uuid, begins_on: z.iso.date(), ends_on: z.iso.date() })
-    .refine(({ begins_on, ends_on }) => ends_on >= begins_on),
+  buildings: z.object({
+    address: z.string().trim().min(1).max(300),
+    city: name,
+    state: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/),
+    zip_code: z.string().trim().regex(/^\d{5}(-\d{4})?$/),
+    agent_stake_id: uuid.nullable(),
+  }),
+  stake_conferences: z.object({ stake_id: uuid, ...conferenceDates }).refine(validConferenceDates),
+  ward_conferences: z.object({ unit_id: uuid, ...conferenceDates }).refine(validConferenceDates),
   languages: z.object({ name }),
-  contacts: z.object({ name, email: email.nullable(), phone }),
-  calling_types: z.object({ name, level: z.enum(callingLevels) }),
+  contacts: z.discriminatedUnion("focus_type", [
+    z.object({ focus_type: z.undefined().optional(), name, email: email.nullable(), phone }),
+    z.object({
+      focus_type: z.enum(focusTypes), first_name: name, last_name: name, email: email.nullable(), phone,
+      ward_id: uuid, is_whatsapp: z.boolean(), baptized_on: date,
+      helper_number: z.string().trim().regex(/^[0-9]+$/).nullable(),
+      pid: z.string().trim().regex(/^[A-Za-z0-9]+$/).nullable(),
+    }).refine(({ first_name, last_name }) => first_name.length + last_name.length < 150)
+      .transform((person) => ({ ...person, name: `${person.first_name} ${person.last_name}` })),
+  ]),
+  calling_types: z.object({ name, level: z.enum(callingLevels), parent_calling_type_id: uuid.nullable().optional() }),
   positions: z.object({
     unit_id: uuid, calling_type_id: uuid, level: z.enum(callingLevels),
     multiple_holders: z.boolean(), retired_on: date, successor_id: uuid.nullable(),
@@ -62,6 +80,12 @@ const schemas = {
 export type Resource = keyof typeof schemas;
 
 function databaseError(error: { code: string; message: string }) {
+  if (error.code === "23503" && error.message.includes("assignments_active_contact_fk")) {
+    return "Focus people cannot hold an active calling. Release the existing calling before changing the person type.";
+  }
+  if (error.code === "23503" && error.message.includes("contacts_ward_fk")) {
+    return "Choose an existing ward or branch. Reassign any focus people before removing their ward or branch.";
+  }
   if (error.code === "23503") return "This record is still linked to other records. Remove those links first.";
   if (error.code === "23505") return "A record with these details already exists.";
   if (error.code === "23514" && error.message.includes("valid_sub_congregation")) {
@@ -72,7 +96,12 @@ function databaseError(error: { code: string; message: string }) {
   return "The change could not be saved. Please try again.";
 }
 
-export async function saveRecord(resource: Resource, id: string | null, values: unknown) {
+function revalidateDirectory() {
+  revalidatePath("/");
+  revalidatePath("/units/[id]", "page");
+}
+
+export async function saveRecord(resource: Exclude<Resource, "buildings">, id: string | null, values: unknown) {
   const viewer = await getViewer();
   if (!viewer?.role) return { error: "You need approved directory access." };
   if (!Object.hasOwn(schemas, resource)) return { error: "Unknown record type." };
@@ -80,9 +109,11 @@ export async function saveRecord(resource: Resource, id: string | null, values: 
   if (!parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "website_url")) {
     return { error: "Enter a website URL that starts with http:// or https://." };
   }
-  if (!parsed.success) return { error: resource === "stake_conferences"
+  if (!parsed.success) return { error: resource === "stake_conferences" || resource === "ward_conferences"
     ? "Enter both dates. The end date must be on or after the begin date."
-    : "Check the required fields, dates, times, and email address." };
+    : resource === "contacts"
+      ? "Check the names, ward or branch, email address, and Date Baptized. Use digits for the helper number and letters or digits for the PID."
+      : "Check the required fields, dates, times, and email address." };
 
   let error;
   if (resource === "directory_access") {
@@ -96,8 +127,61 @@ export async function saveRecord(resource: Resource, id: string | null, values: 
       : await table.insert(parsed.data).select("id").single();
     ({ error } = result);
   }
+  if (resource === "contacts" && (error?.code === "PGRST204" || error?.code === "42703")) {
+    return { error: "Apply the Focus People migration in Supabase to save this person." };
+  }
   if (error) return { error: databaseError(error) };
-  revalidatePath("/");
+  revalidateDirectory();
+  return { error: null };
+}
+
+export async function saveBuilding(id: string | null, form: FormData) {
+  const viewer = await getViewer();
+  if (!viewer?.role) return { error: "You need approved directory access." };
+  if (id !== null && !uuid.safeParse(id).success) return { error: "Invalid building." };
+
+  const parsed = schemas.buildings.safeParse({
+    address: form.get("address"), city: form.get("city"), state: form.get("state"),
+    zip_code: form.get("zip_code"), agent_stake_id: form.get("agent_stake_id") || null,
+  });
+  if (!parsed.success) return { error: "Enter a street address, city, two-letter state, and valid ZIP code. Check the selected Agent Stake." };
+
+  const buildingId = id ?? crypto.randomUUID();
+  const table = viewer.client.from("buildings");
+  const photos = viewer.client.storage.from("buildings");
+  const file = form.get("photo");
+  let previousPhoto: string | null = null;
+  let photoPath: string | null = null;
+  if (file instanceof File && (file.name || file.size)) {
+    const extension = buildingPhotoTypes[file.type as keyof typeof buildingPhotoTypes];
+    if (!Object.hasOwn(buildingPhotoTypes, file.type) || file.size === 0 || file.size > buildingPhotoMaxBytes) {
+      return { error: "Choose a JPEG, PNG, or WebP picture up to 4 MB." };
+    }
+    if (id) {
+      const { data, error } = await table.select("photo_path").eq("id", id).single();
+      if (error) return { error: "Could not load this building. Reopen it and try again." };
+      previousPhoto = data.photo_path;
+    }
+    photoPath = `${buildingId}/${crypto.randomUUID()}.${extension}`;
+    const { error } = await photos.upload(photoPath, file, { contentType: file.type });
+    if (error) return { error: "The picture could not be uploaded. Please try again." };
+  }
+
+  const values = { ...parsed.data, ...(photoPath ? { photo_path: photoPath } : {}) };
+  const update = id ? table.update(values).eq("id", id) : null;
+  if (update && photoPath) {
+    if (previousPhoto) update.eq("photo_path", previousPhoto);
+    else update.is("photo_path", null);
+  }
+  const { data, error } = await (update ?? table.insert({ ...values, id: buildingId })).select("id").maybeSingle();
+  if (error || !data) {
+    if (photoPath) await photos.remove([photoPath]);
+    if (!error) return { error: "This building changed while you were editing it. Reopen it and try again." };
+    if (error.code === "23503") return { error: "Choose an Agent Stake that still exists in the directory." };
+    return { error: databaseError(error) };
+  }
+  if (previousPhoto) await photos.remove([previousPhoto]);
+  revalidateDirectory();
   return { error: null };
 }
 
@@ -119,7 +203,7 @@ export async function addCallingHolder(values: unknown) {
     })
     : await viewer.client.rpc("add_calling_holder", { ...assignment, contact_id, new_contact_name: null });
   if (error) return { error: databaseError(error) };
-  revalidatePath("/");
+  revalidateDirectory();
   return { error: null };
 }
 
@@ -132,7 +216,7 @@ export async function saveCallingOrder(level: string, ids: string[]) {
   if (!parsed.success) return { error: "Could not read the calling order." };
   const { error } = await viewer.client.rpc("save_calling_order", parsed.data);
   if (error) return { error: databaseError(error) };
-  revalidatePath("/");
+  revalidateDirectory();
   return { error: null };
 }
 
@@ -177,7 +261,7 @@ export async function addStakeUnits(stakeId: string, form: FormData) {
     if (error?.code === "23505") return { error: "A unit name already exists. Check your list and try again." };
     if (error) return { error: databaseError(error) };
   }
-  revalidatePath("/");
+  revalidateDirectory();
   return { error: null, added: pending.length, skipped: requested.length - pending.length };
 }
 
@@ -191,9 +275,16 @@ export async function deleteRecord(resource: Resource, id: string) {
   const key = resource === "directory_access" ? "email" : "id";
   const parsed = (key === "email" ? email : uuid).safeParse(id);
   if (!parsed.success) return { error: "Invalid record." };
+  if (resource === "buildings") {
+    const { data, error } = await viewer.client.from("buildings").delete().eq("id", parsed.data).select("photo_path").single();
+    if (error) return { error: databaseError(error) };
+    if (data.photo_path) await viewer.client.storage.from("buildings").remove([data.photo_path]);
+    revalidateDirectory();
+    return { error: null };
+  }
   const { error } = await viewer.client.from(resource).delete().eq(key, parsed.data).select(key).single();
   if (error) return { error: databaseError(error) };
-  revalidatePath("/");
+  revalidateDirectory();
   return { error: null };
 }
 

@@ -18,22 +18,29 @@ A private, mobile-first directory for people serving in Church callings. The uni
 6. To send directly from the directory, set `RESEND_API_KEY` to a sending key and `RESEND_FROM` to an address on a verified Resend domain, optionally with a display name such as `Regional Directory <directory@example.com>`. Replies go to the signed-in sender. Copying addresses for Gmail works without Resend.
 7. Run `bun run dev` and open [localhost:3000](http://localhost:3000). Open **Access** as the administrator to approve additional Google accounts.
 
+## Family History dashboard
+
+- The homepage opens to the regional overview for the latest saved reporting month. The filters select a different month, stake, or ward/branch. After choosing a stake or a ward/branch, use **Compare with** to view another unit at the same level.
+- Choose **Enter report**, then select a ward or branch and month. Enter the year-to-date figures shown in the PDF. In the submitter breakdown, enter the submitter count and eligible member count from each fraction. For an older report that provides a percentage, enter the percent sign. Leave unknown figures blank and enter zero when the report shows an actual zero. Select a saved ward or branch and month to correct its report.
+- Stake and regional totals use the ward and branch reports for the selected month. Counts are summed once per unit and month. Submitter percentages divide the combined submitter count by combined eligible membership. Older percentages and four-generation rates weighted using total eligible membership are marked as estimates. Use the displayed counts and coverage to check the results against the stake PDF.
+
 ## Directory workflow
 
 - In **Units**, coordinating councils open to show their stakes. Expand a stake to see its wards and branches. When multiple regions exist, use the region selector above the tree. A branch shares the ward-level calling types.
 - Use **Add units** on a stake to enter several wards and branches together. Type or paste one name per line in the corresponding field. Existing units and repeated names of the same type are skipped.
 - In **Units → Languages**, add or rename a language for use across regions. Edit a ward or branch to choose its language, record its local sacrament meeting time and whether sacrament meeting comes first, and add optional notes.
 - In a ward or branch, choose **No** for **Is sacrament meeting first?** to enter the first meeting’s start time. You can also enter a council start time.
-- Expand a stake and choose **Add conference** to record a begin date and an end date. The stake keeps all its conference dates together.
+- On a stake, ward, or branch page, choose **Add conference** to record begin and end dates. Stake dates also appear on that stake’s ward and branch pages. Ward and branch dates appear on their own unit pages.
 - Edit a stake, ward, or branch to add its **Website URL**. The link opens from the Units tree.
-- Under **Units → Buildings**, add a building's street address. Edit a unit to select its building. Units under different stakes can share a building.
+- Under **Units → Buildings**, enter the building's street address, city, state, and ZIP code. State starts at **ID** and can be edited. Choose the **Agent Stake** that oversees the building and optionally upload a JPEG, PNG, or WebP picture up to 4 MB. Pictures are stored in the private Supabase `buildings` bucket. Fill in missing city and ZIP information when editing older building records. Edit a unit to select its building. Units under different stakes can share a building.
 - **Visits** opens to a rolling three months of Sundays, one date per row. Switch to **Month** or **Week**, or turn on **All days** to include weekdays and Saturdays.
 - Filter units by unit hierarchy or language, including sub-congregations. Drag a unit onto a date or choose **Schedule**. Each saved sacrament or council start time becomes a one-hour event. Drag the left or right edge of an event to change its time, or open it to edit the times directly.
 - Click a time on the calendar to add a personal driving block. Set your start and end times and optionally name the trip. The calendar uses Mountain Time, and **Show other users’ visits** displays team events alongside yours.
 - If a ward or branch includes a sub-congregation that speaks another language, check that option when editing the unit and select the sub-congregation’s language.
 - Create calling titles in **Callings**. Every stake or ward-level title automatically appears in units of that level. Ward-level titles also appear in branches.
-- Choose **Reorder** in the Stake or Ward / Branch section of **Callings**. Drag the titles or use the arrows, then choose **Save order**. The order applies to all units at that level.
-- In **Units**, choose **View callings** for a stake, ward, or branch. Select **Add holder** to choose an existing person or create one. When adding a new person, you can paste the Name, Phone, and Email cells from Google Sheets into **Full name**. Use **FH Assignment** on the person’s assignment. Calling settings can allow multiple current holders.
+- Choose **Add child calling** on a stake or ward-level title, or select a **Parent calling** when editing a title. Nested callings appear under their parent in the calling list and in each unit.
+- Choose **Reorder** in the Stake or Ward / Branch section of **Callings**. Drag the titles or use the arrows to reorder callings under the same parent, then choose **Save order**. The order applies to all units at that level.
+- In **Units**, choose **View callings** for a stake, ward, or branch. Select **Add holder** to choose an existing person or create one. When adding a new person, you can paste the Name, Phone, and Email cells from Google Sheets into **Full name**. For a nested calling, use **FH Assignment** on the person’s assignment. Calling settings can allow multiple current holders.
 - In **People → Add contact**, paste three adjacent Google Sheets cells into **Full name** in Name, Phone, Email order. Review the filled fields, then save. You can also enter contacts manually.
 - Assign contacts from their calling's unit. Contacts can have multiple assignments. To replace a holder, enter the previous holder's released date and add the next person. An empty released date means the assignment is current. An empty sustained date means the start date is unknown.
 - Edit a calling type's title to rename it across its units. Previous titles and the title recorded when a person was assigned remain visible. For reorganizations, create the new calling, release the old holders, and retire the old calling in its unit. You can link the replacement when retiring it.
