@@ -26,20 +26,37 @@ export async function signOut() {
 
 const name = z.string().trim().min(1).max(150);
 const email = z.string().trim().toLowerCase().max(254).pipe(z.email());
+const phone = z.string().trim().max(50).nullable();
 const uuid = z.uuid();
 const date = z.iso.date().nullable();
+const meetingTime = z.iso.time({ precision: -1 }).nullable().optional();
 const schemas = {
   units: z.object({
     name, kind: z.enum(["region", "council", "stake", "ward", "branch"]),
     parent_id: uuid.nullable(),
+    website_url: z.string().trim().pipe(z.url({ protocol: /^https?$/, normalize: true }))
+      .pipe(z.string().max(2048)).nullable().optional(),
+    building_id: uuid.nullable().optional(),
+    language_id: uuid.nullable().optional(),
+    has_sub_congregation: z.boolean().optional(),
+    sub_congregation_language_id: uuid.nullable().optional(),
+    sacrament_meeting_time: meetingTime,
+    sacrament_meeting_first: z.boolean().nullable().optional(),
+    first_meeting_time: meetingTime,
+    council_meeting_time: meetingTime,
+    notes: z.string().trim().max(2000).nullable().optional(),
   }),
-  contacts: z.object({ name, email: email.nullable(), phone: z.string().trim().max(50).nullable() }),
+  buildings: z.object({ address: z.string().trim().min(1).max(300) }),
+  stake_conferences: z.object({ stake_id: uuid, begins_on: z.iso.date(), ends_on: z.iso.date() })
+    .refine(({ begins_on, ends_on }) => ends_on >= begins_on),
+  languages: z.object({ name }),
+  contacts: z.object({ name, email: email.nullable(), phone }),
   calling_types: z.object({ name, level: z.enum(callingLevels) }),
   positions: z.object({
     unit_id: uuid, calling_type_id: uuid, level: z.enum(callingLevels),
     multiple_holders: z.boolean(), retired_on: date, successor_id: uuid.nullable(),
   }),
-  assignments: z.object({ position_id: uuid, contact_id: uuid, sustained_on: date, released_on: date }),
+  assignments: z.object({ position_id: uuid, contact_id: uuid, sustained_on: date, released_on: date, fh_assignment: z.boolean().optional() }),
   directory_access: z.object({ email }),
 };
 export type Resource = keyof typeof schemas;
@@ -47,6 +64,9 @@ export type Resource = keyof typeof schemas;
 function databaseError(error: { code: string; message: string }) {
   if (error.code === "23503") return "This record is still linked to other records. Remove those links first.";
   if (error.code === "23505") return "A record with these details already exists.";
+  if (error.code === "23514" && error.message.includes("valid_sub_congregation")) {
+    return "Choose a different language for the sub-congregation, or uncheck the sub-congregation box.";
+  }
   if (error.code === "23514") return "Check the dates and required relationships before saving.";
   if (error.code === "P0001") return error.message;
   return "The change could not be saved. Please try again.";
@@ -57,7 +77,12 @@ export async function saveRecord(resource: Resource, id: string | null, values: 
   if (!viewer?.role) return { error: "You need approved directory access." };
   if (!Object.hasOwn(schemas, resource)) return { error: "Unknown record type." };
   const parsed = schemas[resource].safeParse(values);
-  if (!parsed.success) return { error: "Check the required fields, dates, and email address." };
+  if (!parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "website_url")) {
+    return { error: "Enter a website URL that starts with http:// or https://." };
+  }
+  if (!parsed.success) return { error: resource === "stake_conferences"
+    ? "Enter both dates. The end date must be on or after the begin date."
+    : "Check the required fields, dates, times, and email address." };
 
   let error;
   if (resource === "directory_access") {
@@ -74,6 +99,86 @@ export async function saveRecord(resource: Resource, id: string | null, values: 
   if (error) return { error: databaseError(error) };
   revalidatePath("/");
   return { error: null };
+}
+
+const newHolderSchema = z.object({
+  unit_id: uuid, calling_type_id: uuid, contact_id: uuid.nullable(), new_contact_name: name.nullable(),
+  new_contact_phone: phone, new_contact_email: email.nullable(),
+  sustained_on: date, released_on: date, fh_assignment: z.boolean(),
+}).refine(({ contact_id, new_contact_name }) => Boolean(contact_id) !== Boolean(new_contact_name));
+
+export async function addCallingHolder(values: unknown) {
+  const viewer = await getViewer();
+  if (!viewer?.role) return { error: "You need approved directory access." };
+  const holder = newHolderSchema.safeParse(values);
+  if (!holder.success) return { error: "Check the person’s name, contact information, and assignment dates." };
+  const { contact_id, new_contact_name, new_contact_phone, new_contact_email, ...assignment } = holder.data;
+  const { error } = new_contact_name
+    ? await viewer.client.rpc("add_calling_holder_with_contact", {
+      ...assignment, new_contact_name, new_contact_phone, new_contact_email,
+    })
+    : await viewer.client.rpc("add_calling_holder", { ...assignment, contact_id, new_contact_name: null });
+  if (error) return { error: databaseError(error) };
+  revalidatePath("/");
+  return { error: null };
+}
+
+const callingOrderSchema = z.object({ calling_scope: z.enum(["stake", "ward"]), ordered_ids: z.array(uuid).min(1) });
+
+export async function saveCallingOrder(level: string, ids: string[]) {
+  const viewer = await getViewer();
+  if (!viewer?.role) return { error: "You need approved directory access." };
+  const parsed = callingOrderSchema.safeParse({ calling_scope: level, ordered_ids: ids });
+  if (!parsed.success) return { error: "Could not read the calling order." };
+  const { error } = await viewer.client.rpc("save_calling_order", parsed.data);
+  if (error) return { error: databaseError(error) };
+  revalidatePath("/");
+  return { error: null };
+}
+
+const stakeUnitsSchema = z.object({
+  stakeId: uuid,
+  units: z.array(z.object({ name, kind: z.enum(["ward", "branch"]) })).min(1),
+});
+
+export async function addStakeUnits(stakeId: string, form: FormData) {
+  const viewer = await getViewer();
+  if (!viewer?.role) return { error: "You need approved directory access." };
+
+  const lists = [["wards", "ward"], ["branches", "branch"]] as const;
+  const requested = lists.flatMap(([field, kind]) =>
+    String(form.get(field) ?? "").split(/\r\n|\n|\r/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((name) => ({ name, kind })),
+  );
+  if (requested.length === 0) return { error: "Enter at least one ward or branch name." };
+  const parsed = stakeUnitsSchema.safeParse({ stakeId, units: requested });
+  if (!parsed.success) return { error: "Check the selected stake and keep each unit name to 150 characters." };
+
+  const parentId = parsed.data.stakeId;
+  const table = viewer.client.from("units");
+  const { data: existing, error: lookupError } = await table.select("name,kind").eq("parent_id", parentId);
+  if (lookupError) return { error: "Could not check the stake’s existing units. Please try again." };
+
+  const unitKey = (unit: { name: string; kind: string }) => `${unit.kind}:${unit.name.trim().toLowerCase()}`;
+  const names = new Set(existing.map(unitKey));
+  const pending = [];
+  for (const unit of parsed.data.units) {
+    const key = unitKey(unit);
+    if (names.has(key)) continue;
+    names.add(key);
+    pending.push({ ...unit, parent_id: parentId });
+  }
+
+  if (pending.length > 0) {
+    const { error } = await table.insert(pending);
+    if (error?.code === "23503") return { error: "This stake is no longer available. Reload and choose a stake." };
+    if (error?.code === "23505") return { error: "A unit name already exists. Check your list and try again." };
+    if (error) return { error: databaseError(error) };
+  }
+  revalidatePath("/");
+  return { error: null, added: pending.length, skipped: requested.length - pending.length };
 }
 
 export async function deleteRecord(resource: Resource, id: string) {

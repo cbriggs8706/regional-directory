@@ -1,0 +1,287 @@
+"use client";
+
+import { useEffect, useState, type FormEvent } from "react";
+import { ChevronLeft, ChevronRight, GripVertical, Plus } from "lucide-react";
+import { unitLabels, unitPath, type Building, type Directory, type Unit } from "../lib/directory";
+import {
+  formatVisitTime, minuteToTime, offsetDate, shiftVisitPeriod, startOfWeek, timeToMinute, todayInVisitZone, visitLabels, visitPeriod,
+  type VisitEvent, type VisitKind, type VisitView,
+} from "../lib/visits";
+import { deleteVisit, loadVisitEvents, saveVisit, scheduleVisit } from "./visit-actions";
+import { VisitCalendar } from "./visit-calendar";
+import { Modal } from "./editor";
+
+const weekLabel = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
+const views = { rolling: "3 months", month: "Month", week: "Week" } as const;
+type Editor = { unit?: Unit; day: string; event?: VisitEvent; minute?: number };
+type Notice = { text: string; error?: boolean };
+
+export function VisitPlanner({ directory, userId }: { directory: Directory; userId: string }) {
+  const [anchor, setAnchor] = useState(todayInVisitZone);
+  const [view, setView] = useState<VisitView>("rolling");
+  const [allDays, setAllDays] = useState(false);
+  const [includeTeam, setIncludeTeam] = useState(false);
+  const [unitFilter, setUnitFilter] = useState("");
+  const [languageFilter, setLanguageFilter] = useState("");
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [reload, setReload] = useState(0);
+  const [result, setResult] = useState<{ key: string; events: VisitEvent[]; error: string | null } | null>(null);
+  const [draggedUnit, setDraggedUnit] = useState("");
+  const [scheduling, setScheduling] = useState(false);
+  const { from, until, days } = visitPeriod(anchor, view, allDays);
+  const queryKey = `${from}:${until}:${includeTeam}:${reload}`;
+  const loaded = result?.key === queryKey;
+  const events = loaded ? result.events : [];
+  const units = new Map(directory.units.map((unit) => [unit.id, unit]));
+  const buildings = new Map(directory.buildings.map((building) => [building.id, building]));
+  const languages = new Map(directory.languages.map((language) => [language.id, language.name]));
+  const sortedUnits = [...directory.units].sort((a, b) => unitPath(a, units).localeCompare(unitPath(b, units)));
+  const availableUnits = sortedUnits.filter((unit) => {
+    let within = !unitFilter;
+    for (let parent: Unit | undefined = unit; parent && !within; parent = units.get(parent.parent_id ?? "")) {
+      within = parent.id === unitFilter;
+    }
+    return within && (!languageFilter || unit.language_id === languageFilter || unit.sub_congregation_language_id === languageFilter);
+  });
+
+  useEffect(() => {
+    let active = true;
+    loadVisitEvents(from, until, includeTeam).then((response) => {
+      if (active) setResult({ ...response, key: queryKey });
+    }).catch(() => {
+      if (active) setResult({ key: queryKey, events: [], error: "Could not load visits for this date range." });
+    });
+    return () => { active = false; };
+  }, [from, until, includeTeam, queryKey]);
+
+  function afterChange(day: string, text: string) {
+    if (day < from || day >= until) setAnchor(day);
+    if (day !== startOfWeek(day)) setAllDays(true);
+    setReload((value) => value + 1);
+    setNotice({ text });
+  }
+
+  async function dropUnit(id: string, day: string) {
+    const unit = units.get(id);
+    setDraggedUnit("");
+    if (!unit || scheduling) return;
+    if (!unit.sacrament_meeting_time && !unit.council_meeting_time) {
+      setEditor({ unit, day });
+      return;
+    }
+    setScheduling(true);
+    setNotice(null);
+    try {
+      const response = await scheduleVisit(unit.id, day);
+      if (response.error) setNotice({ text: response.error, error: true });
+      else afterChange(day, scheduledMessage(response.added));
+    } catch {
+      setNotice({ text: "Could not schedule the unit’s meetings.", error: true });
+    } finally {
+      setScheduling(false);
+    }
+  }
+
+  async function resize(event: VisitEvent, start: number, end: number) {
+    try {
+      const response = await saveVisit({ ...event, start_minute: start, end_minute: end });
+      if (response.error) setNotice({ text: response.error, error: true });
+      else {
+        setResult((previous) => previous?.key === queryKey ? { ...previous,
+          events: previous.events.map((entry) => entry.id === event.id ? { ...entry, start_minute: start, end_minute: end } : entry),
+        } : previous);
+        setNotice({ text: "Visit time updated." });
+      }
+    } catch {
+      setNotice({ text: "Could not update the visit time.", error: true });
+    }
+  }
+
+  function moveCalendar(next: string) {
+    setAnchor(next);
+    setNotice(null);
+  }
+
+  return <section aria-labelledby="visits-heading">
+    <div className="section-heading visit-heading">
+      <h1 id="visits-heading">Visits</h1>
+      <label className="check"><input type="checkbox" checked={includeTeam}
+        onChange={(event) => setIncludeTeam(event.target.checked)} />Show other users’ visits</label>
+    </div>
+    {notice && <p className={`notice visit-notice${notice.error ? " error" : ""}`} role={notice.error ? "alert" : "status"}>{notice.text}</p>}
+    <div className="visit-layout">
+      <aside className="panel visit-sidebar" aria-labelledby="visit-units">
+        <div className="visit-sidebar-heading">
+          <h2 id="visit-units">Units to visit</h2>
+          <label>Unit<select value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
+            <option value="">All units</option>
+            {sortedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitPath(unit, units)}</option>)}
+          </select></label>
+          <label>Language<select value={languageFilter} onChange={(event) => setLanguageFilter(event.target.value)}>
+            <option value="">All languages</option>
+            {[...directory.languages].sort((a, b) => a.name.localeCompare(b.name)).map((language) =>
+              <option key={language.id} value={language.id}>{language.name}</option>)}
+          </select></label>
+          <p className="field-help">Drag a unit onto a day, or choose Schedule.</p>
+        </div>
+        <ul className="visit-unit-list">
+          {availableUnits.map((unit) => {
+            const building = buildings.get(unit.building_id ?? "");
+            const mainLanguage = languages.get(unit.language_id ?? "");
+            const otherLanguage = languages.get(unit.sub_congregation_language_id ?? "");
+            return <li key={unit.id} draggable={!scheduling} onDragStart={(event) => {
+              event.dataTransfer.setData("text/plain", unit.id);
+              event.dataTransfer.effectAllowed = "copy";
+              setDraggedUnit(unit.id);
+            }} onDragEnd={() => setDraggedUnit("")}>
+              <div className="visit-unit-name"><GripVertical size={15} aria-hidden /><strong>{unit.name}</strong></div>
+              <small>{[unitLabels[unit.kind], mainLanguage, otherLanguage && `${otherLanguage} sub-congregation`].filter(Boolean).join(" · ")}</small>
+              {unit.sacrament_meeting_time && <small>Sacrament {formatVisitTime(timeToMinute(unit.sacrament_meeting_time))}</small>}
+              {unit.council_meeting_time && <small>Council {formatVisitTime(timeToMinute(unit.council_meeting_time))}</small>}
+              {building && <small>{building.address}</small>}
+              <div className="toolbar">
+                <button className="text-button" disabled={scheduling} onClick={() => {
+                  setEditor({ unit, day: days.find((day) => day >= anchor) ?? days[0] ?? anchor });
+                }}><Plus size={15} aria-hidden />Schedule</button>
+              </div>
+            </li>;
+          })}
+        </ul>
+        {availableUnits.length === 0 && <p className="visit-sidebar-heading muted">No units match your filters.</p>}
+      </aside>
+      <div className="panel visit-calendar-panel">
+        <div className="visit-calendar-toolbar">
+          <h2>{weekLabel.formatRange(new Date(from), new Date(offsetDate(until, -1)))}</h2>
+          <div className="toolbar">
+            <button className="icon-button" aria-label="Previous period" onClick={() => moveCalendar(shiftVisitPeriod(anchor, view, -1))}><ChevronLeft size={19} /></button>
+            <button className="button" onClick={() => moveCalendar(todayInVisitZone())}>Today</button>
+            <button className="icon-button" aria-label="Next period" onClick={() => moveCalendar(shiftVisitPeriod(anchor, view, 1))}><ChevronRight size={19} /></button>
+            <label className="visit-date-jump"><span className="visually-hidden">Jump to date</span>
+              <input type="date" value={anchor} onChange={(event) => { if (event.target.value) moveCalendar(event.target.value); }} />
+            </label>
+          </div>
+        </div>
+        <div className="visit-view-controls">
+          <div className="visit-view-switch" role="group" aria-label="Calendar view">
+            {Object.entries(views).map(([mode, label]) => <button className={`button${view === mode ? " primary" : ""}`}
+              key={mode} aria-pressed={view === mode} onClick={() => setView(mode as VisitView)}>{label}</button>)}
+          </div>
+          <label className="check"><input type="checkbox" checked={allDays}
+            onChange={(event) => setAllDays(event.target.checked)} />All days</label>
+        </div>
+        <p className="visit-calendar-caption field-help">Mountain Time · {loaded ? "Click a time to add a driving block." : "Loading visits…"}</p>
+        {loaded && result.error && <p className="notice error" role="alert">{result.error} <button className="text-button" onClick={() => setReload((value) => value + 1)}>Retry</button></p>}
+        <VisitCalendar days={days} events={events} units={units} userId={userId} draggedUnit={draggedUnit}
+          addDrive={(day, minute) => setEditor({ day, minute })}
+          dropUnit={dropUnit} resize={resize} openEvent={(event) => {
+            const unit = units.get(event.unit_id ?? "");
+            if (unit || event.kind === "drive") setEditor({ unit, day: event.event_date, event });
+          }} />
+      </div>
+    </div>
+    {editor && <VisitEditor entry={editor} editable={!editor.event || editor.event.owner_id === userId}
+      building={buildings.get(editor.unit?.building_id ?? "")} close={() => setEditor(null)}
+      done={(day, message) => { setEditor(null); afterChange(day, message); }} />}
+  </section>;
+}
+
+function scheduledMessage(added: number) {
+  return added ? `Added ${added} ${added === 1 ? "meeting" : "meetings"} to your calendar.`
+    : "Those saved meetings are already on your calendar, or the unit has no saved meeting times.";
+}
+
+function VisitEditor({ entry, editable, building, close, done }: {
+  entry: Editor; editable: boolean; building?: Building; close: () => void; done: (day: string, message: string) => void;
+}) {
+  const { event, unit } = entry;
+  const isDrive = !unit;
+  const hasTimes = Boolean(unit?.sacrament_meeting_time || unit?.council_meeting_time);
+  const [useMeetings, setUseMeetings] = useState(!event && hasTimes);
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [error, setError] = useState("");
+  const initialStart = event?.start_minute ?? entry.minute
+    ?? timeToMinute(unit?.sacrament_meeting_time ?? unit?.council_meeting_time ?? "09:00");
+  const initialEnd = event?.end_minute ?? initialStart + (isDrive ? 30 : 60);
+
+  async function submit(eventSubmit: FormEvent<HTMLFormElement>) {
+    eventSubmit.preventDefault();
+    if (busy || !editable) return;
+    const data = new FormData(eventSubmit.currentTarget);
+    const day = String(data.get("date"));
+    setBusy(true);
+    setError("");
+    try {
+      if (useMeetings && unit) {
+        const response = await scheduleVisit(unit.id, day);
+        if (response.error) setError(response.error);
+        else done(day, scheduledMessage(response.added));
+        return;
+      }
+      const response = await saveVisit({
+        id: event?.id ?? null, unit_id: unit?.id ?? null, event_date: day,
+        kind: isDrive ? "drive" : event?.kind ?? String(data.get("kind")) as VisitKind,
+        title: isDrive ? String(data.get("title") ?? "").trim() || null : null,
+        start_minute: timeToMinute(String(data.get("start"))),
+        end_minute: timeToMinute(String(data.get("end"))) + (data.has("next_day") ? 1440 : 0),
+      });
+      if (response.error) setError(response.error);
+      else done(day, isDrive ? (event ? "Driving block updated." : "Driving block added.") : event ? "Visit updated." : "Visit added to your calendar.");
+    } catch {
+      setError("Could not save this visit. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!event || busy || !editable) return;
+    setBusy(true);
+    try {
+      const response = await deleteVisit(event.id);
+      if (response.error) setError(response.error);
+      else done(event.event_date, "Visit removed.");
+    } catch {
+      setError("Could not remove this visit.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Modal title={event ? visitLabels[event.kind] : isDrive ? "Add driving time" : "Schedule a visit"} close={() => { if (!busy) close(); }}>
+    <form className="modal-body stack" onSubmit={submit}>
+      {unit && <strong>{unit.name}</strong>}
+      {building && <small>{building.address}</small>}
+      {!editable && event && <p>Planned by {event.owner_email}</p>}
+      {isDrive && <label>Trip label <span className="optional">optional</span>
+        <input name="title" maxLength={150} defaultValue={event?.title ?? ""} disabled={!editable || busy} />
+      </label>}
+      <label>Date<input type="date" name="date" required defaultValue={entry.day} disabled={!editable || busy} /></label>
+      {!event && hasTimes && <label className="check"><input type="checkbox" checked={useMeetings} disabled={busy}
+        onChange={(e) => setUseMeetings(e.target.checked)} />Use saved meeting times</label>}
+      {useMeetings ? <ul className="field-help">
+        {unit?.sacrament_meeting_time && <li>Sacrament meeting at {formatVisitTime(timeToMinute(unit.sacrament_meeting_time))} · 1 hour</li>}
+        {unit?.council_meeting_time && <li>Ward / branch council at {formatVisitTime(timeToMinute(unit.council_meeting_time))} · 1 hour</li>}
+      </ul> : <>
+        {!event && !isDrive && <label>Event type<select name="kind" defaultValue="visit">
+          {Object.entries(visitLabels).filter(([value]) => value !== "drive").map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select></label>}
+        <div className="visit-time-fields">
+          <label>Start time<input type="time" name="start" required defaultValue={minuteToTime(initialStart)} disabled={!editable || busy} /></label>
+          <label>End time<input type="time" name="end" required defaultValue={minuteToTime(initialEnd)} disabled={!editable || busy} /></label>
+        </div>
+        <label className="check"><input type="checkbox" name="next_day" defaultChecked={initialEnd >= 1440} disabled={!editable || busy} />Ends the next day</label>
+      </>}
+      {error && <p className="notice error" role="alert">{error}</p>}
+      <div className="form-actions">
+        {event && editable && <button type="button" className="button text-danger push" disabled={busy}
+          onClick={() => { if (confirmDelete) void remove(); else setConfirmDelete(true); }}>
+          {confirmDelete ? "Confirm removal" : "Remove"}
+        </button>}
+        <button type="button" className="button" disabled={busy} onClick={close}>{editable ? "Cancel" : "Close"}</button>
+        {editable && <button className="button primary" disabled={busy}>{busy ? "Saving…" : isDrive ? "Save driving block" : "Save visit"}</button>}
+      </div>
+    </form>
+  </Modal>;
+}

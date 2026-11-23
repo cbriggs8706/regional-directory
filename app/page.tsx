@@ -38,7 +38,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ a
   }
 
   const { client, role, user } = viewer;
-  const tables = ["units", "contacts", "calling_types", "calling_names", "positions", "assignments"] as const;
+  const tables = ["units", "buildings", "stake_conferences", "languages", "contacts", "calling_types", "calling_names", "positions", "assignments"] as const;
   const entries = await Promise.all(tables.map(async (table) => {
     const records: object[] = [];
     for (let start = 0; ; start += 500) {
@@ -63,5 +63,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ a
   const directory = { ...Object.fromEntries(entries), directory_access: access?.data ?? [] } as Directory;
 
   return <DirectoryApp directory={directory} admin={role === "admin"} email={user.email ?? ""}
+    userId={user.id}
     mailReady={Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM)} pending={pending} />;
 }
