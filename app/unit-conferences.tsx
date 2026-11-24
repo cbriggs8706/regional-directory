@@ -13,7 +13,7 @@ export function UnitConferences({ unit, conferences, edit }: {
   const ordered = conferences && [...conferences].sort((a, b) =>
     b.begins_on.localeCompare(a.begins_on) || b.ends_on.localeCompare(a.ends_on));
 
-  return <section className="panel unit-conferences" aria-labelledby={headingId}>
+  return <section className="unit-conferences" aria-labelledby={headingId}>
     <div className="unit-conferences-heading">
       <h2 id={headingId}>{conferenceLabel}s</h2>
       {edit && conferences && <button className="button" aria-label={`Add ${conferenceLabel.toLowerCase()}`}

@@ -11,13 +11,14 @@ import { Editor, Modal, type EditorState } from "./editor";
 import { UnitsView } from "./units-view";
 import { UnitPageContent } from "./unit-page-content";
 import { CallingGroups } from "./calling-groups";
+import { AssignmentBuildings } from "./assignment-buildings";
 import { VisitPlanner } from "./visit-planner";
 import { FamilyHistoryDashboard } from "./family-history-dashboard";
 import type { FamilyHistoryReport } from "../lib/family-history";
 import { focusTypeLabels, type FocusActivityData } from "../lib/focus-people";
 import type { UnitJournalData } from "../lib/unit-journal";
 import {
-  callingAncestors, callingLevelLabel, callingPath, normalizeEmail, supportsCallingHierarchy, unitLabels, unitPath,
+  callingLevelLabel, callingPath, normalizeEmail, unitLabels, unitPath,
   type Assignment, type Contact, type Directory,
 } from "../lib/directory";
 
@@ -71,7 +72,9 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
   const units = new Map(directory.units.map((unit) => [unit.id, unit]));
   const detailUnit = unitId ? units.get(unitId) : undefined;
   const people = new Map(directory.contacts.map((contact) => [contact.id, contact]));
+  const organizations = new Map(directory.organizations.map((organization) => [organization.id, organization]));
   const types = new Map(directory.calling_types.map((type) => [type.id, type]));
+  const buildings = new Map(directory.buildings.map((building) => [building.id, building]));
   const positions = new Map(directory.positions.map((position) => [position.id, position]));
   const active = new Map<string, Assignment[]>();
   const assignmentsByPosition = new Map<string, Assignment[]>();
@@ -150,7 +153,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
   function assignmentLine(assignment: Assignment) {
     const position = positions.get(assignment.position_id);
     const current = position && types.get(position.calling_type_id);
-    const currentTitle = current && callingPath(current, types);
+    const currentTitle = current && callingPath(current, organizations);
     return { title: currentTitle ?? assignment.calling_name, unit: position && units.get(position.unit_id)?.name };
   }
 
@@ -201,7 +204,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
                   {sortedTypes.length ? sortedTypes.map((type) => <label key={type.id} className="check">
                     <input type="checkbox" checked={callingFilter.includes(type.id)} onChange={(event) =>
                       setCallingFilter((prev) => event.target.checked ? [...prev, type.id] : prev.filter((id) => id !== type.id))} />
-                    <span>{type.name}<small>{[callingLevelLabel(type.level), ...callingAncestors(type, types).map((entry) => entry.name)].join(" · ")}</small></span>
+                    <span>{type.name}<small>{[callingLevelLabel(type.level), organizations.get(type.organization_id)?.name].filter(Boolean).join(" · ")}</small></span>
                   </label>) : <p className="muted">No callings yet.</p>}
                   <button className="text-button" onClick={(event) => {
                     const filter = event.currentTarget.closest("details");
@@ -211,7 +214,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
               </details>
               <select aria-label="Filter by unit" className="unit-filter" value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
                 <option value="">All units</option>
-                {sortedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitPath(unit, units)}</option>)}
+                {sortedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitPath(unit, units, "dropdown")}</option>)}
               </select>
             </div>
             <div className="list-heading">
@@ -264,10 +267,11 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
 
         {tab === "callings" && <section aria-labelledby="callings-heading">
           <div className="section-heading">
-            <div><h1 id="callings-heading">Callings</h1><p>Manage calling titles, current holders, and past assignments.</p></div>
-            <button className="button primary" onClick={() => setEditor({ resource: "calling_types" })}><Plus size={18} aria-hidden />Add calling type</button>
+            <div><h1 id="callings-heading">Callings</h1><p>Manage organizations, callings, and their holders.</p></div>
+            <button className="button primary" onClick={() => setEditor({ resource: "organizations" })}><Plus size={18} aria-hidden />Add organization</button>
           </div>
-          <CallingGroups callings={sortedTypes} renderCalling={(type) => {
+          {!directory.organizations.length && <p className="panel calling-section-empty">Add an organization to start creating callings.</p>}
+          <CallingGroups organizations={directory.organizations} callings={directory.calling_types} edit={setEditor} renderCalling={(type) => {
             const callingPositions = directory.positions.filter((position) => position.calling_type_id === type.id);
             const names = directory.calling_names.filter((name) => name.calling_type_id === type.id).sort((a, b) => b.id - a.id);
             return (
@@ -276,10 +280,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
                 <div className="calling-body">
                   {names.length > 0 && <p className="muted">Previous titles: {names.map((name) => `${name.previous_name} (changed ${formatDate(name.changed_at)})`).join("; ")}</p>}
                   <div className="toolbar">
-                    <button className="button" onClick={() => setEditor({ resource: "calling_types", row: type })}><Pencil size={15} aria-hidden />Edit title</button>
-                    {supportsCallingHierarchy(type.level) && <button className="button" onClick={() => setEditor({ resource: "calling_types", parent: type })}>
-                      <Plus size={16} aria-hidden />Add child calling
-                    </button>}
+                    <button className="button" onClick={() => setEditor({ resource: "calling_types", row: type })}><Pencil size={15} aria-hidden />Edit calling</button>
                     <button className="button" onClick={() => setEditor({ resource: "positions", callingType: type })}><Plus size={16} aria-hidden />Add to unit</button>
                   </div>
                   {callingPositions.map((position) => {
@@ -304,9 +305,12 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
                           return (
                             <div className="assignment" key={assignment.id}>
                               <div><strong>{name}</strong><small>{assignment.released_on ? `Released ${formatDate(assignment.released_on)}` : "Current"}
-                                {assignment.sustained_on && ` · Sustained ${formatDate(assignment.sustained_on)}`}
-                                {assignment.calling_name !== type.name && ` · Assigned as ${assignment.calling_name}`}</small>
-                                {type.parent_calling_type_id && assignment.fh_assignment && <span className="chip">FH Assignment</span>}
+                                {assignment.sustained_on && ` · Sustained ${formatDate(assignment.sustained_on)}`}</small>
+                                {assignment.calling_name !== type.name && <small>{assignment.calling_name}</small>}
+                                {assignment.assignment_labels.length > 0 && <div className="chips">
+                                  {assignment.assignment_labels.map((label) => <span className="chip" key={label}>{label}</span>)}
+                                </div>}
+                                <AssignmentBuildings assignment={assignment} buildings={buildings} />
                               </div>
                               <button className="button" aria-label={`Edit assignment for ${name}`}
                                 onClick={() => setEditor({ resource: "assignments", position, row: assignment })}>
@@ -330,7 +334,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
         {tab === "units" && (detailUnit
           ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} familyHistory={familyHistory} journal={journal} focusActivity={focusActivity} />
           : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} units={directory.units} buildings={directory.buildings}
-              languages={directory.languages} conferences={directory.stake_conferences} edit={setEditor} />)}
+              languages={directory.languages} edit={setEditor} />)}
 
         {tab === "visits" && <VisitPlanner directory={directory} userId={userId} />}
 

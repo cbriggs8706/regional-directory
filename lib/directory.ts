@@ -74,8 +74,10 @@ export type Contact = {
   helper_number: string | null;
   pid: string | null;
 };
+export type Organization = { id: string; name: string; level: CallingLevel; sort_order: number | null };
 export type CallingType = {
-  id: string; name: string; level: CallingLevel; sort_order: number | null; parent_calling_type_id: string | null;
+  id: string; name: string; level: CallingLevel; sort_order: number | null;
+  organization_id: string; default_multiple_holders: boolean;
 };
 export type CallingName = { id: number; calling_type_id: string; previous_name: string; changed_at: string };
 export type Position = {
@@ -92,9 +94,10 @@ export type Assignment = {
   position_id: string;
   contact_id: string;
   calling_name: string;
-  fh_assignment: boolean;
+  assignment_labels: string[];
   sustained_on: string | null;
   released_on: string | null;
+  assignment_buildings?: { building_id: string }[];
 };
 export type Access = { email: string; is_admin: boolean };
 
@@ -105,6 +108,7 @@ export type Directory = {
   ward_conferences: WardConference[] | null;
   languages: Language[];
   contacts: Contact[];
+  organizations: Organization[];
   calling_types: CallingType[];
   calling_names: CallingName[];
   positions: Position[];
@@ -116,7 +120,13 @@ export function callingLevelLabel(level: CallingLevel) {
   return level === "ward" ? "Ward / Branch" : unitLabels[level];
 }
 
-export function compareCallingOrder(a: CallingType, b: CallingType) {
+export function isBuildingScheduler(calling: CallingType | undefined, names: CallingName[]) {
+  if (calling?.level !== "stake") return false;
+  const matches = (name: string) => name.trim().toLowerCase() === "building scheduler";
+  return matches(calling.name) || names.some((name) => name.calling_type_id === calling.id && matches(name.previous_name));
+}
+
+export function compareCallingOrder(a: Organization | CallingType, b: Organization | CallingType) {
   return (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER)
     || a.name.localeCompare(b.name);
 }
@@ -125,53 +135,28 @@ export function hasSacramentMeeting(kind: UnitKind) {
   return kind === "ward" || kind === "branch";
 }
 
-export function supportsCallingHierarchy(level: CallingLevel) {
-  return level === "stake" || level === "ward";
+export function callingPath(calling: CallingType, organizations: Map<string, Organization>) {
+  const organization = organizations.get(calling.organization_id);
+  return organization ? `${organization.name} / ${calling.name}` : calling.name;
 }
 
-export function callingTree(callings: CallingType[]) {
-  const children = new Map<string | null, CallingType[]>();
-  for (const calling of callings) {
-    const parent = calling.parent_calling_type_id ?? null;
-    const siblings = children.get(parent) ?? [];
-    siblings.push(calling);
-    children.set(parent, siblings);
-  }
-  const ordered: { calling: CallingType; depth: number }[] = [];
-  function walk(parent: string | null, depth: number) {
-    for (const calling of children.get(parent) ?? []) {
-      ordered.push({ calling, depth });
-      walk(calling.id, depth + 1);
-    }
-  }
-  walk(null, 0);
-  return ordered;
+export function abbreviatedUnitName(unit: Unit) {
+  if (unit.kind !== "region" && unit.kind !== "council") return unit.name;
+  const name = unit.name.replace(/\([^)]*\)/g, " ").trim();
+  return name.split(/\s+/).map((word) => Array.from(word)[0]).join("").toUpperCase();
 }
 
-export function callingAncestors(calling: CallingType, types: Map<string, CallingType>) {
-  const parents: CallingType[] = [];
-  const seen = new Set([calling.id]);
-  let parent = types.get(calling.parent_calling_type_id ?? "");
+export function unitPath(unit: Unit, units: Map<string, Unit>, format: "full" | "dropdown" = "full") {
+  const path = [unit];
+  const seen = new Set([unit.id]);
+  let parent = units.get(unit.parent_id ?? "");
   while (parent && !seen.has(parent.id)) {
     seen.add(parent.id);
-    parents.unshift(parent);
-    parent = types.get(parent.parent_calling_type_id ?? "");
+    path.unshift(parent);
+    parent = units.get(parent.parent_id ?? "");
   }
-  return parents;
-}
-
-export function callingPath(calling: CallingType, types: Map<string, CallingType>) {
-  return [...callingAncestors(calling, types), calling].map((entry) => entry.name).join(" / ");
-}
-
-export function unitPath(unit: Unit, units: Map<string, Unit>) {
-  const path = [unit.name];
-  let parent = unit.parent_id && units.get(unit.parent_id);
-  while (parent) {
-    path.unshift(parent.name);
-    parent = parent.parent_id && units.get(parent.parent_id);
-  }
-  return path.join(" / ");
+  const abbreviate = format === "dropdown" && path.length > 2;
+  return path.map((entry) => abbreviate ? abbreviatedUnitName(entry) : entry.name).join(" / ");
 }
 
 export function normalizeEmail(email: string) {

@@ -1,4 +1,5 @@
 import { hasSacramentMeeting, type Unit } from "../lib/directory";
+import { LanguageBadge } from "./language-badge";
 
 const meetingTimeFormat = new Intl.DateTimeFormat("en-US", { timeStyle: "short", timeZone: "UTC" });
 
@@ -14,24 +15,21 @@ export function UnitLanguageBadges({ unit, languageNames }: UnitLanguageProps) {
     && languageNames.get(unit.sub_congregation_language_id);
 
   return <>
-    {language && <span className="chip">{language}</span>}
-    {subLanguage && <span className="chip">{subLanguage} sub-congregation</span>}
+    {language && <LanguageBadge name={language} />}
+    {subLanguage && <LanguageBadge name={subLanguage} subCongregation />}
   </>;
 }
 
-export function UnitFacts({ unit, languageNames, address }: UnitLanguageProps & { address?: string }) {
-  return <>
-    <span className="chips">
-      <UnitLanguageBadges unit={unit} languageNames={languageNames} />
-      {unit.sacrament_meeting_first === false && unit.first_meeting_time && <span className="chip">
-        First meeting at {formatMeetingTime(unit.first_meeting_time)}
-      </span>}
-      {unit.sacrament_meeting_time && <span className="chip">Sacrament at {formatMeetingTime(unit.sacrament_meeting_time)}</span>}
-      {hasSacramentMeeting(unit.kind) && unit.sacrament_meeting_first != null && <span className="chip">
-        {unit.sacrament_meeting_first ? "Sacrament first" : "Sacrament after another meeting"}
-      </span>}
-      {unit.council_meeting_time && <span className="chip">Council at {formatMeetingTime(unit.council_meeting_time)}</span>}
-    </span>
-    {address && <small className="unit-notes">{address}</small>}
-  </>;
+export function UnitFacts({ unit, languageNames }: UnitLanguageProps) {
+  return <span className="chips">
+    <UnitLanguageBadges unit={unit} languageNames={languageNames} />
+    {unit.sacrament_meeting_first === false && unit.first_meeting_time && <span className="chip">
+      First meeting at {formatMeetingTime(unit.first_meeting_time)}
+    </span>}
+    {unit.sacrament_meeting_time && <span className="chip">Sacrament at {formatMeetingTime(unit.sacrament_meeting_time)}</span>}
+    {hasSacramentMeeting(unit.kind) && unit.sacrament_meeting_first != null && <span className="chip">
+      {unit.sacrament_meeting_first ? "Sacrament first" : "Sacrament after another meeting"}
+    </span>}
+    {unit.council_meeting_time && <span className="chip">Council at {formatMeetingTime(unit.council_meeting_time)}</span>}
+  </span>;
 }

@@ -1,15 +1,15 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowLeft, Building2, ChartNoAxesColumn, ExternalLink, Pencil, Tags, Users } from "lucide-react";
-import { buildingPhotoUrl, formatBuildingAddress, hasSacramentMeeting, unitLabels, type Directory, type Unit } from "../lib/directory";
+import { ArrowLeft, Building2, ChartNoAxesColumn, ExternalLink, Maximize2, Pencil, Tags, Users } from "lucide-react";
+import { abbreviatedUnitName, buildingPhotoUrl, formatBuildingAddress, hasSacramentMeeting, unitLabels, type Directory, type Unit } from "../lib/directory";
 import type { FamilyHistoryReport } from "../lib/family-history";
 import type { FocusActivityData } from "../lib/focus-people";
 import type { UnitJournalData } from "../lib/unit-journal";
-import type { EditorState } from "./editor";
+import { Modal, type EditorState } from "./editor";
 import { FocusPeople } from "./focus-people";
 import { FamilyHistoryDashboard } from "./family-history-dashboard";
 import { UnitCallings } from "./unit-callings";
@@ -19,9 +19,9 @@ import { UnitJournal } from "./unit-journal";
 import { StakeUnits } from "./stake-units";
 
 const unitSections = [
-  { id: "callings", Icon: Tags },
   { id: "reports", Icon: ChartNoAxesColumn },
   { id: "units", Icon: Building2 },
+  { id: "callings", Icon: Tags },
   { id: "focus", Icon: Users },
 ] as const;
 
@@ -34,7 +34,9 @@ export function UnitPageContent({ unit, directory, edit, familyHistory, journal,
   focusActivity: FocusActivityData | null;
 }) {
   const searchParams = useSearchParams();
+  const [showBuildingPhoto, setShowBuildingPhoto] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const buildingCover = useRef<HTMLButtonElement>(null);
   useEffect(() => { heading.current?.focus(); }, []);
   const isStake = unit.kind === "stake";
   const isWardOrBranch = hasSacramentMeeting(unit.kind);
@@ -45,31 +47,30 @@ export function UnitPageContent({ unit, directory, edit, familyHistory, journal,
     units: "Units",
     focus: "Focus People",
   };
+  const sections = hasReports ? unitSections.filter(({ id }) => isStake ? id !== "focus" : id !== "units") : [];
+  const defaultSection = sections[0]?.id ?? "callings";
   const requestedSection = searchParams.get("section");
-  const section = requestedSection === "units" && isStake ? "units"
-    : requestedSection === "focus" && isWardOrBranch ? "focus"
-    : requestedSection === "reports" && hasReports ? "reports" : "callings";
+  const section = sections.find(({ id }) => id === requestedSection)?.id ?? defaultSection;
   const building = directory.buildings.find(({ id }) => id === unit.building_id);
+  const buildingPhoto = building?.photo_path ? buildingPhotoUrl(building) : null;
+  const buildingAddress = building ? formatBuildingAddress(building) : null;
   const languageNames = new Map(directory.languages.map(({ id, name }) => [id, name]));
   const units = new Map(directory.units.map((entry) => [entry.id, entry]));
   const parentUnit = units.get(unit.parent_id ?? "");
   const conferenceStake = isStake ? unit : isWardOrBranch && parentUnit?.kind === "stake" ? parentUnit : undefined;
-  const ancestors: string[] = [];
+  const ancestors: Unit[] = [];
   const seen = new Set([unit.id]);
   let parent = parentUnit;
   while (parent && !seen.has(parent.id)) {
     seen.add(parent.id);
-    const name = parent.kind === "region" || parent.kind === "council"
-      ? parent.name.trim().split(/\s+/).map((word) => Array.from(word)[0]).join("").toUpperCase()
-      : parent.name;
-    ancestors.unshift(name);
+    ancestors.unshift(parent);
     parent = units.get(parent.parent_id ?? "");
   }
 
   function showSection(next: typeof section) {
     if (next === section) return;
     const url = new URL(window.location.href);
-    if (next === "callings") url.searchParams.delete("section");
+    if (next === defaultSection) url.searchParams.delete("section");
     else url.searchParams.set("section", next);
     window.history.replaceState(null, "", url);
   }
@@ -79,7 +80,16 @@ export function UnitPageContent({ unit, directory, edit, familyHistory, journal,
       <Link href={`/?tab=units&unit=${unit.id}`} className="button"><ArrowLeft size={18} aria-hidden />Back to units</Link>
     </div>
     <header className="panel unit-overview">
-      {ancestors.length > 0 && <p className="unit-ancestry">{ancestors.join(" / ")}</p>}
+      {ancestors.length > 0 && <nav className="unit-ancestry" aria-label="Unit breadcrumb">
+        <ol>
+          {ancestors.map((ancestor, index) => <li key={ancestor.id}>
+            {index > 0 && <span aria-hidden="true">/</span>}
+            <Link href={`/units/${ancestor.id}`} prefetch={false} title={ancestor.name}>
+              {abbreviatedUnitName(ancestor)}
+            </Link>
+          </li>)}
+        </ol>
+      </nav>}
       <div className="section-heading">
         <div>
           <h1 ref={heading} tabIndex={-1}>{unit.name}</h1>
@@ -90,12 +100,17 @@ export function UnitPageContent({ unit, directory, edit, familyHistory, journal,
         </button>
       </div>
       {building && <div className="unit-overview-building">
-        {building.photo_path
-          ? <Image className="unit-overview-building-photo" src={buildingPhotoUrl(building)} width={110} height={72} alt="" unoptimized />
-          : <span className="unit-overview-building-icon"><Building2 size={22} aria-hidden /></span>}
-        <div>
-          <small>Assigned building</small>
-          <p>{formatBuildingAddress(building)}</p>
+        {buildingPhoto && <button ref={buildingCover} type="button" className="unit-building-cover" aria-label="Enlarge building photo"
+          aria-haspopup="dialog" onClick={() => setShowBuildingPhoto(true)}>
+          <Image src={buildingPhoto} fill alt="" unoptimized />
+          <span className="unit-building-cover-expand"><Maximize2 size={19} aria-hidden /></span>
+        </button>}
+        <div className="unit-building-caption">
+          {!buildingPhoto && <span className="unit-overview-building-icon"><Building2 size={22} aria-hidden /></span>}
+          <div>
+            <small>Assigned building</small>
+            <p>{buildingAddress}</p>
+          </div>
         </div>
       </div>}
       <UnitFacts unit={unit} languageNames={languageNames} />
@@ -105,17 +120,27 @@ export function UnitPageContent({ unit, directory, edit, familyHistory, journal,
         </a>
       </div>}
       {unit.notes && <section className="unit-page-notes"><h2>Notes</h2><p className="unit-notes">{unit.notes}</p></section>}
+      {(conferenceStake || isWardOrBranch) && <div className="unit-conference-panels">
+        {conferenceStake && <UnitConferences unit={conferenceStake}
+          conferences={directory.stake_conferences.filter(({ stake_id }) => stake_id === conferenceStake.id)}
+          edit={isStake ? edit : undefined} />}
+        {isWardOrBranch && <UnitConferences unit={unit}
+          conferences={directory.ward_conferences?.filter(({ unit_id }) => unit_id === unit.id) ?? null} edit={edit} />}
+      </div>}
     </header>
+    {showBuildingPhoto && buildingPhoto && <Modal title="Assigned building" className="unit-building-modal"
+      close={() => {
+        setShowBuildingPhoto(false);
+        requestAnimationFrame(() => buildingCover.current?.focus());
+      }}>
+      <div className="unit-building-modal-photo">
+        <Image src={buildingPhoto} fill alt={`Building at ${buildingAddress}`} unoptimized />
+      </div>
+      <p className="unit-building-modal-address">{buildingAddress}</p>
+    </Modal>}
     {journal && <UnitJournal unitId={unit.id} journal={journal} />}
-    {(conferenceStake || isWardOrBranch) && <div className="unit-conference-panels">
-      {conferenceStake && <UnitConferences unit={conferenceStake}
-        conferences={directory.stake_conferences.filter(({ stake_id }) => stake_id === conferenceStake.id)}
-        edit={isStake ? edit : undefined} />}
-      {isWardOrBranch && <UnitConferences unit={unit}
-        conferences={directory.ward_conferences?.filter(({ unit_id }) => unit_id === unit.id) ?? null} edit={edit} />}
-    </div>}
     {hasReports && <div className="unit-page-switch" role="group" aria-label="Unit sections">
-      {unitSections.filter(({ id }) => isStake ? id !== "focus" : id !== "units").map(({ id, Icon }) => (
+      {sections.map(({ id, Icon }) => (
         <button key={id} className="button" aria-pressed={section === id} onClick={() => showSection(id)}>
           <Icon size={19} aria-hidden />{sectionLabels[id]}
         </button>

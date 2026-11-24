@@ -10,6 +10,8 @@ import {
 import { deleteVisit, loadVisitEvents, saveVisit, scheduleVisit } from "./visit-actions";
 import { VisitCalendar } from "./visit-calendar";
 import { Modal } from "./editor";
+import { languageColorKey } from "./language-badge";
+import { UnitLanguageBadges } from "./unit-facts";
 
 const weekLabel = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
 const views = { rolling: "3 months", month: "Month", week: "Week" } as const;
@@ -116,27 +118,27 @@ export function VisitPlanner({ directory, userId }: { directory: Directory; user
           <h2 id="visit-units">Units to visit</h2>
           <label>Unit<select value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
             <option value="">All units</option>
-            {sortedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitPath(unit, units)}</option>)}
+            {sortedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitPath(unit, units, "dropdown")}</option>)}
           </select></label>
-          <label>Language<select value={languageFilter} onChange={(event) => setLanguageFilter(event.target.value)}>
+          <label>Language<select value={languageFilter} data-language={languageColorKey(languages.get(languageFilter))}
+            onChange={(event) => setLanguageFilter(event.target.value)}>
             <option value="">All languages</option>
             {[...directory.languages].sort((a, b) => a.name.localeCompare(b.name)).map((language) =>
-              <option key={language.id} value={language.id}>{language.name}</option>)}
+              <option key={language.id} value={language.id} data-language={languageColorKey(language.name)}>{language.name}</option>)}
           </select></label>
           <p className="field-help">Drag a unit onto a day, or choose Schedule.</p>
         </div>
         <ul className="visit-unit-list">
           {availableUnits.map((unit) => {
             const building = buildings.get(unit.building_id ?? "");
-            const mainLanguage = languages.get(unit.language_id ?? "");
-            const otherLanguage = languages.get(unit.sub_congregation_language_id ?? "");
             return <li key={unit.id} draggable={!scheduling} onDragStart={(event) => {
               event.dataTransfer.setData("text/plain", unit.id);
               event.dataTransfer.effectAllowed = "copy";
               setDraggedUnit(unit.id);
             }} onDragEnd={() => setDraggedUnit("")}>
               <div className="visit-unit-name"><GripVertical size={15} aria-hidden /><strong>{unit.name}</strong></div>
-              <small>{[unitLabels[unit.kind], mainLanguage, otherLanguage && `${otherLanguage} sub-congregation`].filter(Boolean).join(" · ")}</small>
+              <small>{unitLabels[unit.kind]}</small>
+              <span className="chips"><UnitLanguageBadges unit={unit} languageNames={languages} /></span>
               {unit.sacrament_meeting_time && <small>Sacrament {formatVisitTime(timeToMinute(unit.sacrament_meeting_time))}</small>}
               {unit.council_meeting_time && <small>Council {formatVisitTime(timeToMinute(unit.council_meeting_time))}</small>}
               {building && <small>{formatBuildingAddress(building)}</small>}

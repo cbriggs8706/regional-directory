@@ -80,12 +80,17 @@ export async function DirectoryPage({ viewer, unitId, journalPage }: {
   journalPage?: number;
 }) {
   const { client, role, user } = viewer;
-  const tables = ["units", "buildings", "stake_conferences", "languages", "contacts", "calling_types", "calling_names", "positions", "assignments"] as const;
+  const tables = ["units", "buildings", "stake_conferences", "languages", "contacts", "organizations", "calling_types", "calling_names", "positions", "assignments"] as const;
   const entries = await Promise.all(tables.map(async (table) => {
     const records: object[] = [];
+    let fields = table === "assignments" ? "*,assignment_buildings(building_id)" : "*";
     for (let start = 0; ; start += 500) {
-      const { data, error } = await client.from(table).select("*").order("id").range(start, start + 499);
-      if (error) throw new Error(`Could not load ${table}.`);
+      let { data, error } = await client.from(table).select(fields).order("id").range(start, start + 499);
+      if (start === 0 && table === "assignments" && error?.code === "PGRST200") {
+        fields = "*";
+        ({ data, error } = await client.from(table).select(fields).order("id").range(start, start + 499));
+      }
+      if (error || !data) throw new Error(`Could not load ${table}.`);
       records.push(...data);
       if (data.length < 500) return [table, records] as const;
     }

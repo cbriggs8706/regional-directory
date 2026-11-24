@@ -33,6 +33,8 @@ const date = z.iso.date().nullable();
 const conferenceDates = { begins_on: z.iso.date(), ends_on: z.iso.date() };
 const validConferenceDates = ({ begins_on, ends_on }: { begins_on: string; ends_on: string }) => ends_on >= begins_on;
 const meetingTime = z.iso.time({ precision: -1 }).nullable().optional();
+const assignmentDetails = { sustained_on: date, released_on: date, assignment_labels: z.array(z.string().trim().min(1)) };
+const buildingIds = z.array(uuid);
 const schemas = {
   units: z.object({
     name, kind: z.enum(["region", "council", "stake", "ward", "branch"]),
@@ -69,22 +71,29 @@ const schemas = {
     }).refine(({ first_name, last_name }) => first_name.length + last_name.length < 150)
       .transform((person) => ({ ...person, name: `${person.first_name} ${person.last_name}` })),
   ]),
-  calling_types: z.object({ name, level: z.enum(callingLevels), parent_calling_type_id: uuid.nullable().optional() }),
+  organizations: z.object({ name, level: z.enum(callingLevels), sort_order: z.int32().positive().nullable() }),
+  calling_types: z.object({ name, level: z.enum(callingLevels), organization_id: uuid, default_multiple_holders: z.boolean() }),
   positions: z.object({
     unit_id: uuid, calling_type_id: uuid, level: z.enum(callingLevels),
     multiple_holders: z.boolean(), retired_on: date, successor_id: uuid.nullable(),
   }),
-  assignments: z.object({ position_id: uuid, contact_id: uuid, sustained_on: date, released_on: date, fh_assignment: z.boolean().optional() }),
+  assignments: z.object({ position_id: uuid, contact_id: uuid, ...assignmentDetails }),
   directory_access: z.object({ email }),
 };
 export type Resource = keyof typeof schemas;
 
 function databaseError(error: { code: string; message: string }) {
+  if (error.code === "23503" && error.message.includes("assignment_buildings_building_id_fkey")) {
+    return "A selected building is no longer available. Reopen the assignment and choose an existing building.";
+  }
   if (error.code === "23503" && error.message.includes("assignments_active_contact_fk")) {
     return "Focus people cannot hold an active calling. Release the existing calling before changing the person type.";
   }
   if (error.code === "23503" && error.message.includes("contacts_ward_fk")) {
     return "Choose an existing ward or branch. Reassign any focus people before removing their ward or branch.";
+  }
+  if (error.code === "23503" && error.message.includes("calling_organization_fk")) {
+    return "Choose an organization at the same level, or move its callings before removing it.";
   }
   if (error.code === "23503") return "This record is still linked to other records. Remove those links first.";
   if (error.code === "23505") return "A record with these details already exists.";
@@ -188,7 +197,7 @@ export async function saveBuilding(id: string | null, form: FormData) {
 const newHolderSchema = z.object({
   unit_id: uuid, calling_type_id: uuid, contact_id: uuid.nullable(), new_contact_name: name.nullable(),
   new_contact_phone: phone, new_contact_email: email.nullable(),
-  sustained_on: date, released_on: date, fh_assignment: z.boolean(),
+  ...assignmentDetails, building_ids: buildingIds,
 }).refine(({ contact_id, new_contact_name }) => Boolean(contact_id) !== Boolean(new_contact_name));
 
 export async function addCallingHolder(values: unknown) {
@@ -196,23 +205,35 @@ export async function addCallingHolder(values: unknown) {
   if (!viewer?.role) return { error: "You need approved directory access." };
   const holder = newHolderSchema.safeParse(values);
   if (!holder.success) return { error: "Check the person’s name, contact information, and assignment dates." };
-  const { contact_id, new_contact_name, new_contact_phone, new_contact_email, ...assignment } = holder.data;
-  const { error } = new_contact_name
-    ? await viewer.client.rpc("add_calling_holder_with_contact", {
-      ...assignment, new_contact_name, new_contact_phone, new_contact_email,
-    })
-    : await viewer.client.rpc("add_calling_holder", { ...assignment, contact_id, new_contact_name: null });
+  const { error } = await viewer.client.rpc("add_calling_holder_with_buildings", holder.data);
+  if (error?.code === "PGRST202") return { error: "Apply the Calling Organizations migration in Supabase before saving assignments." };
   if (error) return { error: databaseError(error) };
   revalidateDirectory();
   return { error: null };
 }
 
-const callingOrderSchema = z.object({ calling_scope: z.enum(["stake", "ward"]), ordered_ids: z.array(uuid).min(1) });
+const schedulerAssignmentSchema = z.object({ assignment_id: uuid, ...assignmentDetails, building_ids: buildingIds });
 
-export async function saveCallingOrder(level: string, ids: string[]) {
+export async function saveSchedulerAssignment(values: unknown) {
   const viewer = await getViewer();
   if (!viewer?.role) return { error: "You need approved directory access." };
-  const parsed = callingOrderSchema.safeParse({ calling_scope: level, ordered_ids: ids });
+  const parsed = schedulerAssignmentSchema.safeParse(values);
+  if (!parsed.success) return { error: "Check the buildings and assignment dates." };
+  const { error } = await viewer.client.rpc("update_calling_holder_buildings", parsed.data);
+  if (error?.code === "PGRST202") {
+    return { error: "Apply the Calling Organizations migration in Supabase before saving assignments." };
+  }
+  if (error) return { error: databaseError(error) };
+  revalidateDirectory();
+  return { error: null };
+}
+
+const callingOrderSchema = z.object({ organization: uuid, ordered_ids: z.array(uuid).min(1) });
+
+export async function saveCallingOrder(organizationId: string, ids: string[]) {
+  const viewer = await getViewer();
+  if (!viewer?.role) return { error: "You need approved directory access." };
+  const parsed = callingOrderSchema.safeParse({ organization: organizationId, ordered_ids: ids });
   if (!parsed.success) return { error: "Could not read the calling order." };
   const { error } = await viewer.client.rpc("save_calling_order", parsed.data);
   if (error) return { error: databaseError(error) };
@@ -277,6 +298,9 @@ export async function deleteRecord(resource: Resource, id: string) {
   if (!parsed.success) return { error: "Invalid record." };
   if (resource === "buildings") {
     const { data, error } = await viewer.client.from("buildings").delete().eq("id", parsed.data).select("photo_path").single();
+    if (error?.code === "23503" && error.message.includes("assignment_buildings_building_id_fkey")) {
+      return { error: "Remove this building from its scheduler assignments before deleting it." };
+    }
     if (error) return { error: databaseError(error) };
     if (data.photo_path) await viewer.client.storage.from("buildings").remove([data.photo_path]);
     revalidateDirectory();
