@@ -16,6 +16,7 @@ import { VisitPlanner } from "./visit-planner";
 import { FamilyHistoryDashboard } from "./family-history-dashboard";
 import type { FamilyHistoryReport } from "../lib/family-history";
 import { focusTypeLabels, type FocusActivityData } from "../lib/focus-people";
+import type { GetInvolvedData } from "../lib/get-involved";
 import type { UnitJournalData } from "../lib/unit-journal";
 import {
   callingLevelLabel, callingPath, normalizeEmail, unitLabels, unitPath,
@@ -44,11 +45,12 @@ function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => Array.from(word)[0]).join("").toUpperCase();
 }
 
-export function DirectoryApp({ unitId, directory, admin, email, userId, mailReady, pending, familyHistory, journal, focusActivity }: {
+export function DirectoryApp({ unitId, directory, admin, email, userId, mailReady, pending, familyHistory, journal, focusActivity, getInvolved }: {
   unitId?: string; directory: Directory; admin: boolean; email: string; userId: string; mailReady: boolean; pending: Pending[];
   familyHistory: { reports: FamilyHistoryReport[]; loadError: string | null; currentMonth: string };
   journal: UnitJournalData | null;
   focusActivity: FocusActivityData | null;
+  getInvolved: GetInvolvedData | null;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -332,7 +334,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
         </section>}
 
         {tab === "units" && (detailUnit
-          ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} familyHistory={familyHistory} journal={journal} focusActivity={focusActivity} />
+          ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} familyHistory={familyHistory} journal={journal} focusActivity={focusActivity} getInvolved={getInvolved} />
           : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} units={directory.units} buildings={directory.buildings}
               languages={directory.languages} edit={setEditor} />)}
 

@@ -45,15 +45,15 @@ export function StakeUnits({ stake, units, buildings, languageNames }: {
           {groups.map(({ building, address, members }) => (
             <div key={building?.id ?? "unassigned"}>
               <h3 className="stake-unit-building">{address}</h3>
-              <ul className="stake-unit-grid" aria-label={address}>
+              <ul className="child-unit-grid" aria-label={address}>
                 {members.map((unit) => <li key={unit.id}>
-                  <Link href={`/units/${unit.id}`} prefetch={false} className="panel stake-unit-card">
+                  <Link href={`/units/${unit.id}`} prefetch={false} className="panel child-unit-card">
                     <span className="stake-unit-photo">
                       {building?.photo_path
                         ? <Image src={buildingPhotoUrl(building)} alt="" fill unoptimized />
                         : <Building2 size={36} aria-hidden />}
                     </span>
-                    <span className="stake-unit-caption">
+                    <span className="child-unit-caption">
                       <span className="unit-node-title">
                         <strong>{unit.name}</strong>
                         <small>{unitLabels[unit.kind]}</small>

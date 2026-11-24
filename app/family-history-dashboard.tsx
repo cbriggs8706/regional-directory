@@ -1,16 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
 import { type Unit } from "../lib/directory";
 import {
-  countMetrics, formatReportMonth, generationsLabel, monthNames, reportMonthPattern, reportNumber,
+  countMetrics, formatReportMonth, generationsLabel, monthNames, reportComparisonColor, reportMonthPattern, reportNumber, reportPeriod,
   reportSummary, reportUnits, scopeWards, submitterGroups, type FamilyHistoryReport, type ReportSummary,
 } from "../lib/family-history";
-import { MetricChart, metricText, SubmittersChart } from "./report-charts";
+import { MetricChart, SubmittersChart } from "./report-charts";
 import { ReportEntry } from "./report-entry";
+import { SubmitterHistoryEntry } from "./submitter-history-entry";
 
-const yearColors = ["#12674f", "#78877f", "#a1aea8"];
+const previousYearColor = "#bbb7b2";
+const olderYearColor = "#dcdcdc";
 const compareColors = ["#78529a", "#967bb0", "#b19ac6"];
 
 function UnitOptions({ stakes, wards, unitNames }: { stakes: Unit[]; wards: Unit[]; unitNames: Map<string, string> }) {
@@ -24,18 +26,22 @@ function UnitOptions({ stakes, wards, unitNames }: { stakes: Unit[]; wards: Unit
   </>;
 }
 
-export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError, fixedUnit, title = "Family History Activity Report" }: {
+export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError, fixedUnit, comparisonUnits, viewControls }: {
   units: Unit[];
   reports: FamilyHistoryReport[];
   currentMonth: string;
   loadError: string | null;
   fixedUnit?: Unit;
-  title?: string;
+  comparisonUnits?: Unit[];
+  viewControls?: ReactNode;
 }) {
   const [scopeId, setScope] = useState("");
   const [compareId, setCompare] = useState("");
   const [chosenMonth, setChosenMonth] = useState("");
+  const [comparisonMonth, setComparisonMonth] = useState("");
+  const [showPercentages, setShowPercentages] = useState(false);
   const [entry, setEntry] = useState<{ unit: string; month: string } | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [status, setStatus] = useState("");
   const sorted = [...units].sort((a, b) => a.name.localeCompare(b.name));
   const wards = reportUnits(sorted);
@@ -47,52 +53,82 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   }));
   const scope = fixedUnit ?? directory.get(scopeId);
   const comparison = directory.get(compareId);
-  const inScope = scopeWards(wards, scope);
+  const compareAll = Boolean(comparisonUnits?.length);
+  const inScope = scopeWards(sorted, scope);
+  const compareWards = comparison ? scopeWards(sorted, comparison) : [];
   const isWard = scope?.level === "ward";
   const alternatives = fixedUnit ? [] : (scope?.kind === "stake" ? stakes : isWard ? wards : []).filter(({ id }) => id !== scopeId);
   const reportIndex = new Map(reports.map((report) => [`${report.unit_id}/${report.report_month.slice(0, 7)}`, report]));
-  const latest = reports.reduce((latest, { report_month }) => {
-    const month = report_month.slice(0, 7);
-    return month > latest ? month : latest;
-  }, "");
-  const month = chosenMonth || latest || currentMonth;
+  const scopeUnitIds = new Set([...inScope, ...compareWards].map(({ id }) => id));
+  const childUnits = scope ? sorted.filter(({ parent_id }) => parent_id === scope.id) : stakes;
+  const savedMonths = [...new Set(reports.filter(({ unit_id }) => scopeUnitIds.has(unit_id))
+    .map(({ report_month }) => report_month.slice(0, 7)))].sort().reverse();
+  const currentYear = currentMonth.slice(0, 4);
+  const availableMonths = compareAll ? savedMonths.filter((period) => period.startsWith(`${currentYear}-`) && period <= currentMonth) : savedMonths;
+  const savedSelection = comparisonMonth.startsWith(`${currentYear}-`) && comparisonMonth <= currentMonth ? comparisonMonth : "";
+  const month = (compareAll ? savedSelection : chosenMonth) || availableMonths[0] || currentMonth;
   const year = Number(month.slice(0, 4));
   const monthIndex = Number(month.slice(5, 7)) - 1;
+  const trendMonthIndex = compareAll ? Number(currentMonth.slice(5, 7)) - 1 : monthIndex;
   const targets = [scope, ...(comparison ? [comparison] : [])];
   const emptySummary = reportSummary([], 0, false);
+  const wardScopes = new Map([[scope?.id, inScope]]);
+  if (comparison) wardScopes.set(comparison.id, compareWards);
 
   function readMonth(target: Unit | undefined, period: string) {
-    const eligible = scopeWards(wards, target);
+    const eligible = wardScopes.get(target?.id) ?? scopeWards(sorted, target);
+    wardScopes.set(target?.id, eligible);
     const found = eligible.flatMap(({ id }) => reportIndex.get(`${id}/${period}`) ?? []);
     return { summary: reportSummary(found, eligible.length, target?.level === "ward"), filed: found.length, total: eligible.length };
   }
 
-  const periodFor = (year: number, index: number) => `${year}-${String(index + 1).padStart(2, "0")}`;
   const label = (target: Unit | undefined) => target ? unitNames.get(target.id) ?? target.name : "Regional overview";
   const reportsForMonth = readMonth(scope, month);
-  const trend = targets.flatMap((target, targetIndex) => [year, year - 1].map((displayYear, yearIndex) => ({
-    label: comparison ? `${label(target)} · ${displayYear}` : `YTD ${displayYear}`,
-    color: (targetIndex === 0 ? yearColors : compareColors)[yearIndex],
-    dashed: yearIndex === 1,
+  const unitSeries = comparisonUnits?.map((target, index) => ({
+    id: target.id, label: label(target), unitName: target.name, color: reportComparisonColor(index), target,
+  }));
+  const trend = compareAll && unitSeries ? unitSeries.map(({ target, ...series }) => ({
+    ...series,
+    year,
+    metrics: monthNames.map((_, index) => index > trendMonthIndex
+      ? emptySummary.submitters : readMonth(target, reportPeriod(year, index)).summary.submitters),
+  })) : targets.flatMap((target, targetIndex) => [year, year - 1].map((displayYear, yearIndex) => ({
+    label: comparison ? `${label(target)} · YTD ${displayYear}` : `YTD ${displayYear}`,
+    unitName: target?.name ?? label(target),
+    year: displayYear,
+    color: targetIndex === 0 ? (yearIndex === 0 ? "#86b940" : previousYearColor) : compareColors[yearIndex],
+    dashed: targetIndex > 0,
+    previous: yearIndex === 1,
     metrics: monthNames.map((_, index) => yearIndex === 0 && index > monthIndex
-      ? emptySummary.submitters : readMonth(target, periodFor(displayYear, index)).summary.submitters),
+      ? emptySummary.submitters : readMonth(target, reportPeriod(displayYear, index)).summary.submitters),
   })));
-  const yearToDate = targets.flatMap((target, targetIndex) => [year, year - 1, year - 2].map((displayYear, yearIndex) => ({
-    label: comparison ? `${label(target)} · ${displayYear}` : `${monthNames[monthIndex].slice(0, 3)} ${displayYear}`,
-    color: (targetIndex === 0 ? yearColors : compareColors)[yearIndex],
-    summary: readMonth(target, periodFor(displayYear, monthIndex)).summary,
+  const yearToDate = compareAll && unitSeries ? unitSeries.map(({ target, ...series }) => ({
+    ...series, label: target.name, period: formatReportMonth(month), summary: readMonth(target, month).summary,
+  })) : targets.flatMap((target, targetIndex) => [year - 2, year - 1, year].map((displayYear, yearIndex) => ({
+    label: comparison ? `${label(target)} · YTD ${displayYear}` : `YTD ${displayYear}`,
+    unitName: target?.name ?? label(target),
+    period: formatReportMonth(reportPeriod(displayYear, monthIndex)),
+    color: targetIndex === 0 ? [olderYearColor, previousYearColor, null][yearIndex] : compareColors[2 - yearIndex],
+    summary: readMonth(target, reportPeriod(displayYear, monthIndex)).summary,
   })));
-  const current = trend[0].metrics[monthIndex];
-  const previous = trend[1].metrics[monthIndex];
-  let trendCaption = "Year-to-date counts by reporting month";
-  if (!comparison && current.value !== null && previous.value !== null && current.units === current.total && previous.units === previous.total) {
+  const current = trend[0]?.metrics[monthIndex];
+  const previous = trend[1]?.metrics[monthIndex];
+  let trendCaption = compareAll ? `${currentYear} year-to-date counts by unit` : "Year-to-date counts by reporting month";
+  if (!compareAll && !comparison && current && previous && current.value !== null && previous.value !== null && current.units === current.total && previous.units === previous.total) {
     const change = current.value - previous.value;
     trendCaption = change === 0 ? `Same number of submitters through ${monthNames[monthIndex]} as last year.`
-      : `${reportNumber(Math.abs(change))} ${change > 0 ? "more" : "fewer"} ${Math.abs(change) === 1 ? "member" : "members"} submitted through ${monthNames[monthIndex]} than last year.`;
+      : `${reportNumber(Math.abs(change))} ${change > 0 ? "more" : "fewer"} ${Math.abs(change) === 1 ? "member" : "members"} submitted a name year to date (YTD) than last year at this date.`;
   }
 
-  function series(...fields: (keyof ReportSummary)[]) {
-    return yearToDate.map(({ label, color, summary }) => ({ label, color, metrics: fields.map((key) => summary[key]) }));
+  function series(currentColor: string, ...fields: (keyof ReportSummary)[]) {
+    return yearToDate.map(({ color, summary, ...series }) => ({ ...series, color: color ?? currentColor, metrics: fields.map((key) => summary[key]) }));
+  }
+
+  function chooseMonth(period: string) {
+    if (!reportMonthPattern.test(period)) return;
+    if (compareAll) {
+      if (period.startsWith(`${currentYear}-`) && period <= currentMonth) setComparisonMonth(period);
+    } else setChosenMonth(period);
   }
 
   function summaryRow(target: Unit | undefined, emphasize = false) {
@@ -104,10 +140,12 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
       </th>
       {submitterGroups.map(({ key }) => {
         const metric = summary[`${key}_percent`];
+        const display = showPercentages
+          ? (metric.value === null ? "—" : `${metric.value.toFixed(1)}%`)
+          : (metric.fraction?.join(" / ") ?? "—");
         return <td key={key}>
-          {metricText(metric, true)}{metric.value !== null && metric.estimated && <sup aria-label="Estimated">~</sup>}
-          {metric.fraction && <small>{metric.fraction.map((value) => reportNumber(value)).join(" / ")}</small>}
-          {metric.value !== null && metric.units < metric.total && <small>{metric.units} of {metric.total} units</small>}
+          {display}
+          {metric.fraction && (!showPercentages || metric.value !== null) && metric.units < metric.total && <small>{metric.units} of {metric.total} units</small>}
         </td>;
       })}
     </tr>;
@@ -118,8 +156,8 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
       <div className="section-heading report-heading">
         <div>
           {fixedUnit
-            ? <h2 id="report-heading" className="unit-section-heading">{title}</h2>
-            : <h1 id="report-heading">{title}</h1>}
+            ? <h2 id="report-heading" className="unit-section-heading">Family History Activity Report</h2>
+            : <h1 id="report-heading">Family History Activity Report</h1>}
           <p>{label(scope)} · {formatReportMonth(month)}</p>
         </div>
         <button className="button primary" disabled={Boolean(loadError) || !inScope.length}
@@ -131,13 +169,20 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
       <div className="report-filter-bar">
         <div className="report-coverage">
           {reportsForMonth.filed} of {reportsForMonth.total} unit reports for {formatReportMonth(month)}
-          {comparison && <small>{label(comparison)} · {readMonth(comparison, month).filed} of {scopeWards(wards, comparison).length} reports</small>}
+          {comparison && <small>{label(comparison)} · {readMonth(comparison, month).filed} of {compareWards.length} reports</small>}
         </div>
         <div className="report-filters">
           <label>Reporting month
-            <input type="month" aria-label="Reporting month" min="1900-01" max="9999-12" value={month}
-              onChange={(event) => { if (reportMonthPattern.test(event.target.value)) setChosenMonth(event.target.value); }} />
+            <input type="month" aria-label="Reporting month" min={compareAll ? `${currentYear}-01` : "1900-01"}
+              max={compareAll ? currentMonth : "9999-12"} value={month} onChange={(event) => chooseMonth(event.target.value)} />
           </label>
+          {availableMonths.length > 1 && <label>Saved reports
+            <select value={availableMonths.includes(month) ? month : ""} onChange={(event) => chooseMonth(event.target.value)}>
+              <option value="" disabled>Select a report</option>
+              {availableMonths.map((period) => <option key={period} value={period}>{formatReportMonth(period)}</option>)}
+            </select>
+          </label>}
+          {viewControls}
           {!fixedUnit && <label>Stake or ward/branch
             <select value={scopeId} onChange={(event) => { setScope(event.target.value); setCompare(""); }}>
               <option value="">Regional overview</option>
@@ -156,34 +201,51 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
       {status && <p className="notice" role="status">{status}</p>}
       {loadError ? <p className="notice error" role="alert">{loadError}</p> : <>
         {reportsForMonth.filed === 0 && <p className="notice">No unit reports for this view in {formatReportMonth(month)}.</p>}
-        <SubmittersChart series={trend} comparison={trendCaption} />
-        <div className="report-metrics">
-          <MetricChart title={generationsLabel} series={series("first_four_generations")} categories={[""]} percentage />
-          <MetricChart title={countMetrics[1].label} series={series("familysearch_logins")} categories={[""]} />
-          <MetricChart title="Members participating in family history activities" series={series("added_ancestor", "added_memory")}
-            categories={[countMetrics[2].label, countMetrics[3].label]} />
-        </div>
-        <section className="panel report-detail">
-          <h2>YTD Submitters Unit Detail</h2>
-          <div className="report-table-scroll">
-            <table className="report-table">
-              <thead><tr><th scope="col">Unit</th>
-                {submitterGroups.map(({ key, label }) => <th key={key} scope="col">{label}</th>)}
-              </tr></thead>
-              <tbody>
-                {summaryRow(scope, true)}
-                {comparison ? summaryRow(comparison, true) : !isWard && (scope ? inScope : stakes).map((unit) => summaryRow(unit))}
-              </tbody>
-            </table>
+        <div className={`panel report-sheet${comparison || compareAll ? " report-sheet-comparison" : ""}`}>
+          <SubmittersChart series={trend} comparison={trendCaption} compareUnits={compareAll} enterHistory={inScope.length ? () => {
+            setStatus("");
+            setHistoryOpen(true);
+          } : undefined} />
+          <div className="report-metrics">
+            <MetricChart title={generationsLabel} series={series("#27c4f5", "first_four_generations")} percentage compareUnits={compareAll} />
+            <MetricChart title={countMetrics[1].label} series={series("#fcb34c", "familysearch_logins")} compareUnits={compareAll} />
+            <MetricChart title="Members Participating in Family History Activities" series={series("#9b6798", "added_ancestor", "added_memory", "indexed")} compareUnits={compareAll}
+              categories={["Added Names\nto Tree", "Added Memory\nto Tree", "Indexed"]} />
           </div>
-          <p className="field-help">A dash means no usable data. Partial figures show how many units contributed. A ~ marks an estimate based on reported percentages or total eligible membership.</p>
-        </section>
+          <section className="report-detail">
+            <h2>YTD Submitters Unit Detail</h2>
+            <div className="report-detail-display" role="group" aria-label="Submitter detail display">
+              <button className="button" type="button" aria-pressed={!showPercentages} onClick={() => setShowPercentages(false)}>Totals</button>
+              <button className="button" type="button" aria-pressed={showPercentages} onClick={() => setShowPercentages(true)}>Percentages</button>
+            </div>
+            <div className="report-table-scroll">
+              <table className="report-table">
+                <thead><tr><th scope="col">Unit</th>
+                  {submitterGroups.map(({ key, label }) => <th key={key} scope="col">{label}</th>)}
+                </tr></thead>
+                <tbody>
+                  {!compareAll && summaryRow(scope, true)}
+                  {compareAll ? comparisonUnits?.map((unit) => summaryRow(unit))
+                    : comparison ? summaryRow(comparison, true) : !isWard && childUnits.map((unit) => summaryRow(unit))}
+                </tbody>
+              </table>
+            </div>
+            <p className="field-help">Percentages use saved submitter and eligible member counts. A dash means the selected value is unavailable. Partial totals show how many units contributed.</p>
+          </section>
+        </div>
       </>}
       {entry && <ReportEntry fixedUnit={Boolean(fixedUnit && isWard)} wards={inScope} unitNames={unitNames} initialUnit={entry.unit} initialMonth={entry.month} reports={reportIndex}
         close={() => setEntry(null)} saved={(unit, period) => {
           setEntry(null);
-          setChosenMonth(period);
+          chooseMonth(period);
           setStatus(`Saved ${formatReportMonth(period)} for ${directory.get(unit)?.name ?? "this unit"}.`);
+        }} />}
+      {historyOpen && <SubmitterHistoryEntry fixedUnit={Boolean(isWard)} wards={inScope} unitNames={unitNames}
+        initialUnit={isWard ? scope.id : inScope.length === 1 ? inScope[0].id : ""} initialMonth={month} reports={reportIndex}
+        close={() => setHistoryOpen(false)} saved={(unit, period, changedMonths) => {
+          setHistoryOpen(false);
+          chooseMonth(period);
+          setStatus(`Saved ${changedMonths} ${changedMonths === 1 ? "month" : "months"} of submitter history for ${directory.get(unit)?.name ?? "this unit"}.`);
         }} />}
     </section>
   );

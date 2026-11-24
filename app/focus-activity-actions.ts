@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { reportMonthPattern } from "../lib/family-history";
+import type { FocusMetric } from "../lib/focus-people";
 import { getViewer } from "../lib/supabase";
 
 const status = z.boolean().nullable();
@@ -16,7 +17,7 @@ const activitySchema = z.object({
     added_ancestor: status,
     added_memory: status,
     first_four_generations: status,
-  }),
+  } satisfies Record<FocusMetric, typeof status>),
 });
 
 export async function saveFocusActivity(input: unknown) {

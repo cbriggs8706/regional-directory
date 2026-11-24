@@ -1,4 +1,4 @@
-import { countMetrics, generationsLabel } from "./family-history";
+import { generationsLabel } from "./family-history";
 
 export const focusTypes = ["recent_convert", "person_of_interest"] as const;
 export type FocusType = typeof focusTypes[number];
@@ -9,10 +9,10 @@ export const focusTypeLabels = {
 } satisfies Record<FocusType, string>;
 
 export const focusMetrics = [
-  ...countMetrics.map(({ key, label }) => ({
-    key,
-    label: key === "submitters" ? "Submitted a name" : key === "familysearch_logins" ? "Signed in to FamilySearch" : label,
-  })),
+  { key: "submitters", label: "Submitted a name" },
+  { key: "familysearch_logins", label: "Signed in to FamilySearch" },
+  { key: "added_ancestor", label: "Added ancestor to tree" },
+  { key: "added_memory", label: "Added memory to tree" },
   { key: "first_four_generations", label: generationsLabel },
 ] as const;
 

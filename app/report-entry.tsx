@@ -32,6 +32,7 @@ export function ReportEntry({ wards, unitNames, initialUnit, initialMonth, repor
       const value = form.get(field);
       return [field, typeof value === "string" && value.trim() ? Number(value) : null];
     }));
+    if (values.indexed === null && existing?.indexed == null) delete values.indexed;
     for (const { key, label } of submitterGroups) {
       const raw = String(form.get(`${key}_submitter_input`) ?? "").trim();
       if (raw && !/^(?:\d+|(?:\d+(?:\.\d+)?|\.\d+)\s*%)$/.test(raw)) {

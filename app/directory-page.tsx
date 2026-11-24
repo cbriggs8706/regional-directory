@@ -2,8 +2,9 @@ import { notFound } from "next/navigation";
 import { DirectoryApp } from "./directory-app";
 import type { getViewer } from "../lib/supabase";
 import type { Directory, WardConference } from "../lib/directory";
-import { reportUnits, scopeWards, type FamilyHistoryReport } from "../lib/family-history";
+import { scopeWards, type FamilyHistoryReport } from "../lib/family-history";
 import { focusMetrics, type FocusActivity, type FocusActivityData } from "../lib/focus-people";
+import type { GetInvolvedReport } from "../lib/get-involved";
 import { journalPageSize, type UnitJournalData } from "../lib/unit-journal";
 
 type Viewer = NonNullable<Awaited<ReturnType<typeof getViewer>>>;
@@ -21,22 +22,31 @@ async function loadWardConferences(client: Viewer["client"], unitId?: string): P
   }
 }
 
-async function loadFamilyHistoryReports(client: Viewer["client"], unitIds?: string[]) {
-  if (unitIds?.length === 0) return { reports: [], loadError: null };
-  const reports: FamilyHistoryReport[] = [];
-  for (let start = 0; ; start += 500) {
-    const query = client.from("family_history_reports").select("*");
-    if (unitIds) query.in("unit_id", unitIds);
-    const { data, error } = await query.order("report_month").order("unit_id").range(start, start + 499);
-    if (error) {
-      const message = error.code === "42P01" || error.code === "PGRST205"
-        ? "Apply the Family History reports migration in Supabase to enable reporting."
-        : "Could not load Family History reports. Refresh the page to try again.";
-      return { reports: [], loadError: message };
+type ReportTables = { family_history_reports: FamilyHistoryReport; get_involved_reports: GetInvolvedReport };
+
+async function loadUnitReports<Table extends keyof ReportTables>(client: Viewer["client"], table: Table, unitIds?: string[]) {
+  const reports: ReportTables[Table][] = [];
+  const label = table === "family_history_reports" ? "Family History" : "Get Involved";
+  // Keep area-wide ID filters within request URL limits.
+  const batchSize = 100;
+  const batches = unitIds ? Array.from({ length: Math.ceil(unitIds.length / batchSize) }, (_, index) =>
+    unitIds.slice(index * batchSize, (index + 1) * batchSize)) : [undefined];
+  for (const batch of batches) {
+    for (let start = 0; ; start += 500) {
+      const query = client.from(table).select("*");
+      if (batch) query.in("unit_id", batch);
+      const { data, error } = await query.order("report_month").order("unit_id").range(start, start + 499);
+      if (error) {
+        const loadError = error.code === "42P01" || error.code === "PGRST205"
+          ? `Apply the ${label} reports migration in Supabase to enable reporting.`
+          : `Could not load ${label} reports. Refresh the page to try again.`;
+        return { reports: [], loadError };
+      }
+      reports.push(...data as ReportTables[Table][]);
+      if (data.length < 500) break;
     }
-    reports.push(...data as FamilyHistoryReport[]);
-    if (data.length < 500) return { reports, loadError: null };
   }
+  return { reports, loadError: null };
 }
 
 async function loadFocusActivity(client: Viewer["client"], wardId: string): Promise<FocusActivityData> {
@@ -100,8 +110,10 @@ export async function DirectoryPage({ viewer, unitId, journalPage }: {
   const unit = unitId ? units.find(({ id }) => id === unitId) : undefined;
   if (unitId && !unit) notFound();
 
-  const [familyHistory, wardConferences, journal, focusActivity, access, recent] = await Promise.all([
-    loadFamilyHistoryReports(client, unit ? scopeWards(reportUnits(units), unit).map(({ id }) => id) : undefined),
+  const wardIds = unit ? scopeWards(units, unit).map(({ id }) => id) : undefined;
+  const [familyHistory, getInvolved, wardConferences, journal, focusActivity, access, recent] = await Promise.all([
+    loadUnitReports(client, "family_history_reports", wardIds),
+    wardIds ? loadUnitReports(client, "get_involved_reports", wardIds) : null,
     loadWardConferences(client, unit?.level === "ward" ? unit.id : undefined),
     unit ? loadUnitJournal(client, unit.id, journalPage) : null,
     unit?.level === "ward" ? loadFocusActivity(client, unit.id) : null,
@@ -125,6 +137,6 @@ export async function DirectoryPage({ viewer, unitId, journalPage }: {
   const currentMonth = [localDate.find(({ type }) => type === "year")!.value, localDate.find(({ type }) => type === "month")!.value].join("-");
 
   return <DirectoryApp unitId={unitId} directory={directory} familyHistory={{ ...familyHistory, currentMonth }} admin={role === "admin"} email={user.email ?? ""}
-    userId={user.id} journal={journal} focusActivity={focusActivity}
+    userId={user.id} journal={journal} focusActivity={focusActivity} getInvolved={getInvolved}
     mailReady={Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM)} pending={pending} />;
 }
