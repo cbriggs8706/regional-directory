@@ -8,6 +8,7 @@ import { focusMetrics, focusTypeLabels, type FocusActivity, type FocusActivityDa
 import { Modal, type EditorState } from "./editor";
 import { UnitSectionHeading } from "./unit-section-heading";
 import { saveFocusActivity } from "./focus-activity-actions";
+import { PersonCard } from "./person-card";
 
 const baptismDate = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
@@ -37,7 +38,7 @@ export function FocusPeople({ unit, contacts, currentMonth, history, edit }: {
         <ul className="focus-people-list">
           {contacts.map((person) => {
             const record = activity.get(person.id);
-            return <li key={person.id} className="focus-person">
+            return <PersonCard key={person.id} className="focus-person" person={person}>
               <div className="focus-person-heading">
                 <div className="contact-info">
                   <h3>{person.name}</h3>
@@ -46,8 +47,8 @@ export function FocusPeople({ unit, contacts, currentMonth, history, edit }: {
                     {person.is_whatsapp && <span className="chip">WhatsApp</span>}
                   </div>
                   {person.baptized_on && <span>Date Baptized <time dateTime={person.baptized_on}>{baptismDate.format(new Date(person.baptized_on))}</time></span>}
-                  {person.phone && <a href={`tel:${person.phone}`}>{person.phone}</a>}
-                  {person.email && <a href={`mailto:${person.email}`}>{person.email}</a>}
+                  {person.phone && <span>{person.phone}</span>}
+                  {person.email && <span>{person.email}</span>}
                 </div>
                 <button className="icon-button" onClick={() => edit({ resource: "contacts", row: person })}
                   aria-label={`Edit ${person.name}`}><Pencil size={17} aria-hidden /></button>
@@ -61,7 +62,7 @@ export function FocusPeople({ unit, contacts, currentMonth, history, edit }: {
                 </dl>
                 <button className="button" aria-label={`Edit activity for ${person.name}`} onClick={() => setEditing({ person, month, record })}>Edit activity</button>
               </>}
-            </li>;
+            </PersonCard>;
           })}
         </ul>
       </>}

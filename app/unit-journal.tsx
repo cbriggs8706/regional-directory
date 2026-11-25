@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { RouteLink } from "./route-navigation";
 import { useSearchParams } from "next/navigation";
 import { Pencil } from "lucide-react";
 import { useState, type FormEvent } from "react";
@@ -11,8 +11,10 @@ import { saveJournalEntry } from "./journal-actions";
 
 const dateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
-export function UnitJournal({ unitId, journal, newEntryOpen, closeNewEntry }: {
-  unitId: string; journal: UnitJournalData; newEntryOpen: boolean; closeNewEntry: () => void;
+type JournalScope = { unitId: string; organizationId?: never } | { organizationId: string; unitId?: never };
+
+export function UnitJournal({ journal, newEntryOpen, closeNewEntry, ...scope }: JournalScope & {
+  journal: UnitJournalData; newEntryOpen: boolean; closeNewEntry: () => void;
 }) {
   const searchParams = useSearchParams();
   const [editing, setEditing] = useState<JournalEntry | null>(null);
@@ -24,7 +26,8 @@ export function UnitJournal({ unitId, journal, newEntryOpen, closeNewEntry }: {
     if (nextPage) params.set("journalPage", String(nextPage));
     else params.delete("journalPage");
     const query = params.toString();
-    return `/units/${unitId}${query ? `?${query}` : ""}#unit-journal`;
+    const path = scope.organizationId ? `/organizations/${scope.organizationId}` : `/units/${scope.unitId}`;
+    return `${path}${query ? `?${query}` : ""}#unit-journal`;
   }
 
   function closeEditor() {
@@ -57,21 +60,21 @@ export function UnitJournal({ unitId, journal, newEntryOpen, closeNewEntry }: {
       </ul>}
       {(page || hasMore) && <div className="unit-journal-links">
         {page ? <>
-          <Link className="button" href={journalHref()}>Show latest entries</Link>
-          {page > 1 && <Link className="button" href={journalHref(page - 1)}>Newer entries</Link>}
-          {hasMore && <Link className="button" href={journalHref(page + 1)}>Older entries</Link>}
-        </> : <Link className="button" href={journalHref(1)}>View full journal</Link>}
+          <RouteLink className="button" href={journalHref()}>Show latest entries</RouteLink>
+          {page > 1 && <RouteLink className="button" href={journalHref(page - 1)}>Newer entries</RouteLink>}
+          {hasMore && <RouteLink className="button" href={journalHref(page + 1)}>Older entries</RouteLink>}
+        </> : <RouteLink className="button" href={journalHref(1)}>View full journal</RouteLink>}
       </div>}
     </>}
-    {(editing || newEntryOpen) && <JournalEntryEditor unitId={unitId} entry={editing} close={closeEditor} saved={() => {
+    {(editing || newEntryOpen) && <JournalEntryEditor {...scope} entry={editing} close={closeEditor} saved={() => {
       closeEditor();
       setStatus("Journal entry saved.");
     }} />}
   </section>;
 }
 
-function JournalEntryEditor({ unitId, entry, close, saved }: {
-  unitId: string; entry: JournalEntry | null; close: () => void; saved: () => void;
+function JournalEntryEditor({ entry, close, saved, ...scope }: JournalScope & {
+  entry: JournalEntry | null; close: () => void; saved: () => void;
 }) {
   const [issue, setIssue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,7 +89,7 @@ function JournalEntryEditor({ unitId, entry, close, saved }: {
     try {
       const result = await saveJournalEntry({
         id: entry?.id,
-        unitId,
+        ...scope,
         entry_date: form.get("entry_date"),
         notes: form.get("notes"),
       });

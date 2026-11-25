@@ -1,27 +1,30 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { RouteLink } from "./route-navigation";
+import { useSearchParams } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import {
-  BookOpen, Building2, CalendarDays, ChevronDown, Copy, Ellipsis, Filter, House, Languages, LogOut, Mail, Pencil, Plus, Search, ShieldCheck, Tags, Users, X,
+  BookOpen, Building2, CalendarDays, ChevronDown, Copy, Ellipsis, FileText, Filter, House, Languages, LogOut, Mail, Pencil, Plus, Search, ShieldCheck, Tags, Users, X,
 } from "lucide-react";
 import { sendEmail, signOut, type SendResult } from "./actions";
 import { Editor, Modal, type EditorState } from "./editor";
 import { UnitsView } from "./units-view";
 import { BuildingsView, LanguagesView, type DirectoryManagementSection } from "./directory-management";
+import { OrganizationsView } from "./organizations-view";
 import { UnitPageContent } from "./unit-page-content";
 import { CallingGroups } from "./calling-groups";
 import { AssignmentBuildings } from "./assignment-buildings";
 import { VisitPlanner } from "./visit-planner";
 import { FamilyHistoryDashboard } from "./family-history-dashboard";
-import type { FamilyHistoryReport } from "../lib/family-history";
-import { focusTypeLabels, type FocusActivityData } from "../lib/focus-people";
-import type { GetInvolvedData } from "../lib/get-involved";
-import type { UnitJournalData } from "../lib/unit-journal";
-import type { UnitVisitData } from "../lib/visits";
+import { ReportGenerator } from "./report-generator/report-generator";
+import { PendingContent, SectionSkeleton } from "./pending-content";
+import { PersonCard } from "./person-card";
+import type { FamilyHistoryLoad, UnitDetailLoad } from "./directory-page";
+import { focusTypeLabels } from "../lib/focus-people";
+import type { JournalReportData } from "../lib/journal-report";
+import type { OrganizationDetail, OrganizationDirectory } from "../lib/organizations";
 import {
-  callingLevelLabel, callingPath, normalizeEmail, unitLabels, unitPath,
+  callingLevelLabel, normalizeEmail, unitNameWithType, unitPath,
   type Assignment, type Contact, type Directory,
 } from "../lib/directory";
 
@@ -36,7 +39,9 @@ const sections = [
   { id: "callings", label: "Callings", Icon: Tags },
   { id: "access", label: "Admin", description: "Manage access", Icon: ShieldCheck },
 ] as const;
-const managementLinks = [
+const moreLinks = [
+  { id: "report-generator", label: "Report Generator", Icon: FileText },
+  { id: "organizations", label: "Organizations", Icon: Building2 },
   { id: "buildings", label: "Buildings", Icon: Building2 },
   { id: "languages", label: "Languages", Icon: Languages },
 ] as const;
@@ -51,19 +56,19 @@ function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => Array.from(word)[0]).join("").toUpperCase();
 }
 
-export function DirectoryApp({ unitId, managementSection, directory, admin, email, userId, mailReady, pending, familyHistory, journal, focusActivity, getInvolved, unitVisits }: {
+export function DirectoryApp({ unitId, managementSection, directory, admin, email, userId, mailReady, pending, familyHistory, currentMonth, unitData, journalReport, organizationsPage, organizationDirectory, organizationDetail }: {
   unitId?: string; managementSection?: DirectoryManagementSection;
+  organizationsPage?: boolean; organizationDirectory: OrganizationDirectory; organizationDetail: OrganizationDetail | null;
   directory: Directory; admin: boolean; email: string; userId: string; mailReady: boolean; pending: Pending[];
-  familyHistory: { reports: FamilyHistoryReport[]; loadError: string | null; currentMonth: string };
-  journal: UnitJournalData | null;
-  focusActivity: FocusActivityData | null;
-  getInvolved: GetInvolvedData | null;
-  unitVisits: UnitVisitData | null;
+  familyHistory: FamilyHistoryLoad | null;
+  currentMonth: string;
+  journalReport: { month: string; data: Promise<JournalReportData> } | null;
+  unitData: UnitDetailLoad | null;
 }) {
-  const router = useRouter();
   const params = useSearchParams();
   const requestedTab = params.get("tab");
-  const tab = managementSection ?? (unitId ? "units" : sections.find(({ id }) =>
+  const standalone = journalReport ? "report-generator" : organizationsPage ? "organizations" : managementSection;
+  const tab = standalone ?? (unitId ? "units" : sections.find(({ id }) =>
     id === requestedTab && (id !== "access" || admin))?.id ?? "dashboard");
   const browseUnitId = params.get("unit") ?? "";
   const [moreOpen, setMoreOpen] = useState(false);
@@ -100,6 +105,20 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
       active.set(assignment.contact_id, assignments);
     }
   }
+  const organizationNames = new Map(organizationDirectory.organizations.map((organization) => [organization.id, organization.name]));
+  const organizationTitles = new Map(organizationDirectory.titles.map((title) => [title.id, title]));
+  const personOrganizations = new Map<string, { id: string; organizationId: string; label: string; active: boolean }[]>();
+  for (const assignment of organizationDirectory.assignments) {
+    const title = organizationTitles.get(assignment.title_id);
+    const organizationName = title && organizationNames.get(title.organization_id);
+    if (!title || !organizationName) continue;
+    const records = personOrganizations.get(assignment.contact_id) ?? [];
+    records.push({
+      id: assignment.id, organizationId: title.organization_id,
+      label: `${title.name} • ${organizationName}`, active: assignment.active,
+    });
+    personOrganizations.set(assignment.contact_id, records);
+  }
   const sortedUnits = [...directory.units].sort((a, b) => unitPath(a, units).localeCompare(unitPath(b, units)));
   const sortedTypes = [...directory.calling_types].sort((a, b) => a.name.localeCompare(b.name));
   const sortedPeople = [...directory.contacts].sort((a, b) => a.name.localeCompare(b.name));
@@ -133,13 +152,21 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
   const emailable = visible.filter((person) => person.email);
   const pendingMail = pending.filter((entry) => !dismissed.includes(entry.id));
 
-  function navigate(next: Tab) {
-    setMoreOpen(false);
-    if (next === tab && !unitId) return;
+  function tabHref(next: Tab) {
     const href = next === "dashboard" ? "/" : `/?tab=${next}`;
-    const destination = unitId && next === "units" ? `${href}&unit=${unitId}` : href;
-    if (unitId || managementSection) router.push(destination);
-    else window.history.pushState(null, "", destination);
+    return unitId && next === "units" ? `${href}&unit=${unitId}` : href;
+  }
+
+  function navigateTab(next: Tab, event: { preventDefault: () => void }) {
+    setMoreOpen(false);
+    if (next === tab && !unitId) {
+      event.preventDefault();
+      return;
+    }
+    if (!unitId && !standalone) {
+      event.preventDefault();
+      window.history.pushState(null, "", tabHref(next));
+    }
     content.current?.scrollTo({ top: 0 });
   }
 
@@ -161,15 +188,8 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
     }
   }
 
-  function assignmentLine(assignment: Assignment) {
-    const position = positions.get(assignment.position_id);
-    const current = position && types.get(position.calling_type_id);
-    const currentTitle = current && callingPath(current, organizations);
-    return { title: currentTitle ?? assignment.calling_name, unit: position && units.get(position.unit_id)?.name };
-  }
-
   return (
-    <div className={tab === "units" ? "directory-layout unit-workspace" : "directory-layout"}>
+    <div className={tab === "units" || organizationDetail ? "directory-layout unit-workspace" : "directory-layout"}>
       <div className="directory-content" ref={content}>
       <header className="site-header">
         <div className="shell header-inner">
@@ -191,7 +211,10 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
           <button className="icon-button" aria-label="Dismiss status" onClick={() => setMessage("")}><X size={16} /></button>
         </div>}
 
-        {tab === "dashboard" && <FamilyHistoryDashboard units={directory.units} {...familyHistory} addHost={addHost} />}
+        {tab === "dashboard" && familyHistory && <PendingContent data={familyHistory}
+          fallback={<SectionSkeleton label="Family History reports" chart />}>
+          {(reports) => <FamilyHistoryDashboard units={directory.units} {...reports} currentMonth={currentMonth} addHost={addHost} />}
+        </PendingContent>}
 
         {tab === "people" && <section aria-labelledby="people-heading">
           <div className="section-heading">
@@ -243,7 +266,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
             ) : (
               <ul className="contact-list">
                 {visible.map((person) => (
-                  <li key={person.id} className={selected.has(person.id) && person.email ? "selected" : ""}>
+                  <PersonCard key={person.id} person={person} className={selected.has(person.id) && person.email ? "selected" : undefined}>
                     <label className="contact-check">
                       <input type="checkbox" aria-label={`Select ${person.name} for email`} disabled={!person.email}
                         title={person.email ? undefined : "This contact has no email address"}
@@ -254,22 +277,34 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
                     <div className="contact-info">
                       <strong>{person.name}</strong>
                       {person.email && <span>{person.email}</span>}
-                      {person.phone && <a href={`tel:${person.phone}`}>{person.phone}</a>}
+                      {person.phone && <span>{person.phone}</span>}
                       <div className="chips">
                         {person.focus_type && <span className="chip">{focusTypeLabels[person.focus_type]}</span>}
-                        {person.focus_type && person.ward_id && <Link className="chip" href={`/units/${person.ward_id}?section=focus`}>
+                        {person.focus_type && person.ward_id && <RouteLink className="chip" href={`/units/${person.ward_id}?section=focus`}>
                           {units.get(person.ward_id)?.name}
-                        </Link>}
+                        </RouteLink>}
+                        {person.home_ward_id && units.has(person.home_ward_id) && <RouteLink className="chip" href={`/units/${person.home_ward_id}`}>
+                          Home Ward · {units.get(person.home_ward_id)?.name}
+                        </RouteLink>}
                         {active.get(person.id)?.map((assignment) => {
-                          const { title, unit } = assignmentLine(assignment);
-                          return <span className="chip" key={assignment.id}>{title} · {unit}</span>;
+                          const position = positions.get(assignment.position_id);
+                          const calling = position && types.get(position.calling_type_id);
+                          const unit = position && units.get(position.unit_id);
+                          return <span className="chip" key={assignment.id}>
+                            {calling?.name ?? assignment.calling_name}{unit && ` • ${unitNameWithType(unit, "short")}`}
+                          </span>;
                         })}
+                        {personOrganizations.get(person.id)?.map(({ id, organizationId, label, active }) =>
+                          <RouteLink className="chip" key={id} href={`/organizations/${organizationId}`}
+                            title={active ? undefined : "Inactive assignment"} aria-label={active ? undefined : `${label} (inactive)`}>
+                            {label}
+                          </RouteLink>)}
                       </div>
                     </div>
                     <button className="icon-button" aria-label={`Edit ${person.name}`} onClick={() => setEditor({ resource: "contacts", row: person })}>
                       <Pencil size={17} />
                     </button>
-                  </li>
+                  </PersonCard>
                 ))}
               </ul>
             )}
@@ -312,9 +347,10 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
                             onClick={() => setEditor({ resource: "positions", row: position })}><Pencil size={16} /></button>
                         </div>
                         {assignments.map((assignment) => {
-                          const name = people.get(assignment.contact_id)?.name;
+                          const person = people.get(assignment.contact_id);
+                          const name = person?.name;
                           return (
-                            <div className="assignment" key={assignment.id}>
+                            <PersonCard as="div" className="assignment" key={assignment.id} person={person}>
                               <div><strong>{name}</strong><small>{assignment.released_on ? `Released ${formatDate(assignment.released_on)}` : "Current"}
                                 {assignment.sustained_on && ` · Sustained ${formatDate(assignment.sustained_on)}`}</small>
                                 {assignment.calling_name !== type.name && <small>{assignment.calling_name}</small>}
@@ -327,7 +363,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
                                 onClick={() => setEditor({ resource: "assignments", position, row: assignment })}>
                                 {assignment.released_on ? "Edit" : "Edit / release"}
                               </button>
-                            </div>
+                            </PersonCard>
                           );
                         })}
                         <button className="text-button add-holder" onClick={() => setEditor({ resource: "assignments", position })}>
@@ -342,13 +378,18 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
           }} />
         </section>}
 
-        {tab === "units" && (detailUnit
-          ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} familyHistory={familyHistory}
-              journal={journal} focusActivity={focusActivity} getInvolved={getInvolved} visits={unitVisits} userId={userId} addHost={addHost} />
-          : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} directory={directory} />)}
+        {tab === "units" && (detailUnit && unitData
+          ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} data={unitData}
+              currentMonth={currentMonth} userId={userId} addHost={addHost}
+              organizationDirectory={organizationDirectory} />
+          : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} directory={directory}
+              organizationDirectory={organizationDirectory} />)}
 
+        {tab === "organizations" && <OrganizationsView key={organizationDetail?.organization.id ?? "list"}
+          directory={directory} records={organizationDirectory} detail={organizationDetail} addHost={addHost} />}
         {tab === "buildings" && <BuildingsView directory={directory} edit={setEditor} addHost={addHost} />}
         {tab === "languages" && <LanguagesView directory={directory} edit={setEditor} addHost={addHost} />}
+        {journalReport && <ReportGenerator key={journalReport.month} {...journalReport} />}
 
         {tab === "visits" && <VisitPlanner directory={directory} userId={userId} />}
 
@@ -365,7 +406,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
       </main>
       </div>
 
-      <footer className="directory-footer" ref={detailUnit || tab === "dashboard" || managementSection ? setAddHost : undefined}>
+      <footer className="directory-footer" ref={detailUnit || tab === "dashboard" || managementSection || organizationsPage ? setAddHost : undefined}>
         {recipientCount > 0 && <aside className="selection-bar" aria-label="Email selection">
           <div className="shell selection-inner">
             <div className="selection-summary">
@@ -385,11 +426,12 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
         </aside>}
         <nav className="shell footer-nav" aria-label="Directory sections">
           {primarySections.map(({ id, label, Icon }) => (
-            <button key={id} type="button" aria-current={id === tab ? "page" : undefined} onClick={() => navigate(id)}>
+            <RouteLink key={id} href={tabHref(id)} prefetch={unitId || standalone ? undefined : false}
+              aria-current={id === tab ? "page" : undefined} onNavigate={(event) => navigateTab(id, event)}>
               <Icon size={22} aria-hidden />{label}
-            </button>
+            </RouteLink>
           ))}
-          <button type="button" aria-haspopup="dialog" aria-expanded={moreOpen} data-active={Boolean(managementSection) || tab === "callings" || tab === "access"}
+          <button type="button" aria-haspopup="dialog" aria-expanded={moreOpen} data-active={Boolean(standalone) || tab === "callings" || tab === "access"}
             onClick={() => setMoreOpen(true)}>
             <Ellipsis size={22} aria-hidden />More
           </button>
@@ -399,19 +441,20 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
         <nav className="modal-body more-nav" aria-label="All directory sections">
           {sections.filter(({ id }) => id !== "access" || admin).map((section) => {
             const { id, label, Icon } = section;
-            return <button key={id} type="button" aria-current={id === tab ? "page" : undefined} onClick={() => navigate(id)}>
+            return <RouteLink key={id} href={tabHref(id)} prefetch={unitId || standalone ? undefined : false}
+              aria-current={id === tab ? "page" : undefined} onNavigate={(event) => navigateTab(id, event)}>
               <Icon size={20} aria-hidden />
               <span>{label}{"description" in section && <small>{section.description}</small>}</span>
-            </button>;
+            </RouteLink>;
           })}
-          {managementLinks.map(({ id, label, Icon }) => (
-            <Link key={id} href={`/${id}`} prefetch={false} aria-current={id === tab ? "page" : undefined}
+          {moreLinks.map(({ id, label, Icon }) => (
+            <RouteLink key={id} href={`/${id}`} aria-current={id === tab ? "page" : undefined}
               onNavigate={() => {
                 setMoreOpen(false);
                 content.current?.scrollTo({ top: 0 });
               }}>
               <Icon size={20} aria-hidden />{label}
-            </Link>
+            </RouteLink>
           ))}
         </nav>
       </Modal>}
@@ -501,9 +544,9 @@ function Compose({ contacts, pending, ready, count, close, remove, finish }: {
         {count ? <form className="stack" onSubmit={submit}>
           <fieldset disabled={busy || currentInProgress}>
             <legend>{count} {count === 1 ? "recipient" : "recipients"}</legend>
-            <ul className="recipient-list">{contacts.map((person) => <li key={person.id}><div><strong>{person.name}</strong><small>{person.email}</small></div>
+            <ul className="recipient-list">{contacts.map((person) => <PersonCard key={person.id} person={person}><div><strong>{person.name}</strong><small>{person.email}</small></div>
               <button type="button" className="icon-button" onClick={() => remove(person.id)} aria-label={`Remove ${person.name}`}><X size={16} /></button>
-            </li>)}</ul>
+            </PersonCard>)}</ul>
             <p className="field-help">Each address receives one private copy.</p>
             <label>Subject<input name="subject" maxLength={200} required /></label>
             <label>Message<textarea name="body" rows={6} maxLength={20000} required /></label>

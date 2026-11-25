@@ -3,11 +3,12 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, X, type LucideIcon } from "lucide-react";
+import { PendingContent } from "./pending-content";
 
 export function AddMenu({ host, label, actions }: {
   host: HTMLElement | null;
   label: string;
-  actions: { label: string; Icon: LucideIcon; run: () => void; hidden?: boolean }[];
+  actions: { label: string; Icon: LucideIcon; run: () => void; hidden?: boolean; availableWhen?: Promise<boolean> }[];
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -41,8 +42,13 @@ export function AddMenu({ host, label, actions }: {
       {open ? <X size={26} aria-hidden /> : <Plus size={28} aria-hidden />}
     </button>
     <div id={id} className="panel unit-add-actions" role="group" aria-label={label} hidden={!open}>
-      {available.map(({ label: action, Icon, run }) => <button key={action} type="button" className="button"
-        onClick={() => { close(); run(); }}><Icon size={18} aria-hidden />{action}</button>)}
+      {open && available.map(({ label: action, Icon, run, availableWhen }) => {
+        const button = <button key={action} type="button" className="button"
+          onClick={() => { close(); run(); }}><Icon size={18} aria-hidden />{action}</button>;
+        return availableWhen ? <PendingContent key={action} data={availableWhen} fallback={null}>
+          {(ready) => ready ? button : null}
+        </PendingContent> : button;
+      })}
     </div>
   </div>, host);
 }

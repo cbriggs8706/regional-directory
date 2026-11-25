@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Loading from "./loading";
+import { RouteNavigation } from "./route-navigation";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -7,5 +9,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body><RouteNavigation loading={<Loading />}>{children}</RouteNavigation></body></html>;
 }

@@ -45,14 +45,18 @@ function CallingGroup({ organization, callings, edit, renderCalling }: {
         </button>
       </div>}
     </div>
-    {reordering ? <CallingOrder organizationId={organization.id} callings={callings} close={() => setReordering(false)} />
+    {reordering ? <ReorderList items={callings} instructions="Drag the handles or use the arrows to reorder callings in this organization."
+        saveOrder={(ids) => saveCallingOrder(organization.id, ids)} close={() => setReordering(false)} />
       : callings.length > 0 ? callings.map(renderCalling)
         : <p className="panel calling-section-empty">No calling titles yet.</p>}
   </section>;
 }
 
-function CallingOrder({ organizationId, callings, close }: { organizationId: string; callings: CallingType[]; close: () => void }) {
-  const [draft, setDraft] = useState(callings);
+export function ReorderList({ items, instructions, saveOrder, close }: {
+  items: { id: string; name: string }[]; instructions: string;
+  saveOrder: (ids: string[]) => Promise<{ error: string | null }>; close: () => void;
+}) {
+  const [draft, setDraft] = useState(items);
   const [dragging, setDragging] = useState("");
   const [target, setTarget] = useState("");
   const [announcement, setAnnouncement] = useState("");
@@ -61,31 +65,34 @@ function CallingOrder({ organizationId, callings, close }: { organizationId: str
   const list = useRef<HTMLUListElement>(null);
   const drag = useRef<{ id: string; pointer: number; x: number; y: number } | null>(null);
   const frame = useRef(0);
-  const sourceIndex = draft.findIndex((calling) => calling.id === dragging);
+  const sourceIndex = draft.findIndex((item) => item.id === dragging);
 
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
   function move(from: number, to: number) {
     if (from === to || from < 0 || to < 0 || to >= draft.length) return;
     const updated = [...draft];
-    const [calling] = updated.splice(from, 1);
-    updated.splice(to, 0, calling);
+    const [item] = updated.splice(from, 1);
+    updated.splice(to, 0, item);
     setDraft(updated);
-    setAnnouncement(`${calling.name} moved to position ${to + 1}.`);
+    setAnnouncement(`${item.name} moved to position ${to + 1}.`);
   }
 
   function targetAt(x: number, y: number) {
-    const row = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-calling-id]");
+    const row = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-item-id]");
     if (!row || !list.current?.contains(row)) return "";
-    return row.dataset.callingId ?? "";
+    return row.dataset.itemId ?? "";
   }
 
   function monitorDrag() {
     const active = drag.current;
     if (!active) return;
+    const scrollArea = list.current?.closest<HTMLElement>(".directory-content");
+    const bounds = scrollArea?.getBoundingClientRect();
+    const scrollable = scrollArea ?? window;
     const threshold = 70;
-    if (active.y < threshold) window.scrollBy(0, -14);
-    else if (active.y > window.innerHeight - threshold) window.scrollBy(0, 14);
+    if (active.y < (bounds?.top ?? 0) + threshold) scrollable.scrollBy(0, -14);
+    else if (active.y > (bounds?.bottom ?? window.innerHeight) - threshold) scrollable.scrollBy(0, 14);
     setTarget(targetAt(active.x, active.y));
     frame.current = requestAnimationFrame(monitorDrag);
   }
@@ -103,7 +110,7 @@ function CallingOrder({ organizationId, callings, close }: { organizationId: str
     if (!active || active.pointer !== event.pointerId) return;
     if (drop) {
       const destination = targetAt(event.clientX, event.clientY);
-      move(draft.findIndex((calling) => calling.id === active.id), draft.findIndex((calling) => calling.id === destination));
+      move(draft.findIndex((item) => item.id === active.id), draft.findIndex((item) => item.id === destination));
     }
     cancelAnimationFrame(frame.current);
     drag.current = null;
@@ -115,7 +122,7 @@ function CallingOrder({ organizationId, callings, close }: { organizationId: str
     setBusy(true);
     setError("");
     try {
-      const result = await saveCallingOrder(organizationId, draft.map(({ id }) => id));
+      const result = await saveOrder(draft.map(({ id }) => id));
       if (result.error) setError(result.error);
       else close();
     } catch {
@@ -126,13 +133,13 @@ function CallingOrder({ organizationId, callings, close }: { organizationId: str
   }
 
   return <div className="panel calling-order">
-    <p className="field-help">Drag the handles or use the arrows to reorder callings in this organization.</p>
+    <p className="field-help">{instructions}</p>
     <ul ref={list} className="calling-order-list">
-      {draft.map((calling, index) => <li key={calling.id} data-calling-id={calling.id}
-        data-moving={calling.id === dragging ? "" : undefined}
-        data-drop={dragging && calling.id === target && sourceIndex !== index ? (index < sourceIndex ? "before" : "after") : undefined}>
-        <button type="button" className="icon-button calling-drag" tabIndex={-1} disabled={busy} aria-label={`Drag ${calling.name}`}
-          onPointerDown={(event) => start(event, calling.id)}
+      {draft.map((item, index) => <li key={item.id} data-item-id={item.id}
+        data-moving={item.id === dragging ? "" : undefined}
+        data-drop={dragging && item.id === target && sourceIndex !== index ? (index < sourceIndex ? "before" : "after") : undefined}>
+        <button type="button" className="icon-button calling-drag" tabIndex={-1} disabled={busy} aria-label={`Drag ${item.name}`}
+          onPointerDown={(event) => start(event, item.id)}
           onPointerMove={(event) => {
             if (drag.current?.pointer !== event.pointerId) return;
             drag.current.x = event.clientX;
@@ -141,10 +148,10 @@ function CallingOrder({ organizationId, callings, close }: { organizationId: str
           onPointerUp={(event) => stop(event, true)} onPointerCancel={stop} onLostPointerCapture={stop}>
           <GripVertical size={19} aria-hidden />
         </button>
-        <span>{calling.name}</span>
-        <button className="icon-button" aria-label={`Move ${calling.name} up`} disabled={busy || Boolean(dragging) || index === 0}
+        <span>{item.name}</span>
+        <button className="icon-button" aria-label={`Move ${item.name} up`} disabled={busy || Boolean(dragging) || index === 0}
           onClick={() => move(index, index - 1)}><ArrowUp size={17} aria-hidden /></button>
-        <button className="icon-button" aria-label={`Move ${calling.name} down`} disabled={busy || Boolean(dragging) || index === draft.length - 1}
+        <button className="icon-button" aria-label={`Move ${item.name} down`} disabled={busy || Boolean(dragging) || index === draft.length - 1}
           onClick={() => move(index, index + 1)}><ArrowDown size={17} aria-hidden /></button>
       </li>)}
     </ul>

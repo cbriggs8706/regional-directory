@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { RouteLink } from "./route-navigation";
 import { ChevronDown, Pencil, Plus, UserRound } from "lucide-react";
 import {
   compareCallingOrder, type Assignment, type CallingType, type Directory, type Organization, type Position, type Unit,
@@ -10,6 +10,7 @@ import { AssignmentBuildings } from "./assignment-buildings";
 import { Modal, type EditorState } from "./editor";
 import { standardCallingGroups, standardGroupFor, standardGroupsForUnit, standardRoleIndex, type StandardCallingGroup } from "../lib/standard-callings";
 import { UnitSectionHeading } from "./unit-section-heading";
+import { PersonCard } from "./person-card";
 
 const dateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
@@ -38,17 +39,17 @@ export function UnitCallings({ unit, directory, edit, title }: {
     holders.push(assignment);
     assignmentsByPosition.set(assignment.position_id, holders);
   }
-  const contacts = new Map(directory.contacts.map((person) => [person.id, person.name]));
+  const contacts = new Map(directory.contacts.map((person) => [person.id, person]));
   const buildings = new Map(directory.buildings.map((building) => [building.id, building]));
 
   function holderName(assignment: Assignment) {
-    return contacts.get(assignment.contact_id) ?? "Unknown holder";
+    return contacts.get(assignment.contact_id)?.name ?? "Unknown holder";
   }
 
   function holderCard(assignment: Assignment, calling: CallingType, position: Position) {
     const name = holderName(assignment);
     const callingName = assignment.released_on ? assignment.calling_name : calling.name;
-    return <li className="panel unit-holder-card" key={assignment.id}>
+    return <PersonCard className="panel unit-holder-card" key={assignment.id} person={contacts.get(assignment.contact_id)}>
       <span className="unit-holder-icon"><UserRound size={19} aria-hidden /></span>
       <div className="unit-holder-info">
         <strong>{name}</strong>
@@ -65,7 +66,7 @@ export function UnitCallings({ unit, directory, edit, title }: {
         onClick={() => edit({ resource: "assignments", position, row: assignment })}>
         <Pencil size={16} aria-hidden />
       </button>
-    </li>;
+    </PersonCard>;
   }
 
   function addHolder(calling: CallingType, position?: Position) {
@@ -86,7 +87,7 @@ export function UnitCallings({ unit, directory, edit, title }: {
   return <section className="unit-tab-section" aria-labelledby="unit-callings-heading">
     <UnitSectionHeading id="unit-callings-heading" title={title} unit={unit} />
     {groups.length === 0 ? <div className="panel empty"><h3>No callings yet</h3>
-      <Link href="/?tab=callings">Manage organizations and callings</Link>
+      <RouteLink href="/?tab=callings">Manage organizations and callings</RouteLink>
     </div> : <div className="calling-list unit-callings-list">
       {groups.map(({ key, name, organization, template }) => {
         const roles = callings.filter((calling) => calling.organization_id === organization?.id).map((calling) => {

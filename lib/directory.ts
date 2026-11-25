@@ -70,6 +70,7 @@ export type Contact = {
   first_name: string | null;
   last_name: string | null;
   ward_id: string | null;
+  home_ward_id: string | null;
   is_whatsapp: boolean;
   baptized_on: string | null;
   helper_number: string | null;
@@ -106,7 +107,6 @@ export type Directory = {
   units: Unit[];
   buildings: Building[];
   stake_conferences: StakeConference[];
-  ward_conferences: WardConference[] | null;
   languages: Language[];
   contacts: Contact[];
   organizations: Organization[];
@@ -117,8 +117,12 @@ export type Directory = {
   directory_access: Access[];
 };
 
-export function unitNameWithType(unit: Pick<Unit, "name" | "kind">) {
+export function unitNameWithType(unit: Pick<Unit, "name" | "kind">, format: "full" | "short" = "full") {
   const name = unit.name.trim();
+  if (format === "short" && unit.kind === "council") {
+    const baseName = name.replace(/(?:^|\s+)(?:Coordinating Council|CC)$/i, "");
+    return baseName ? `${baseName} CC` : "CC";
+  }
   const type = unitLabels[unit.kind];
   const nameLower = name.toLowerCase();
   const typeLower = type.toLowerCase();
@@ -135,7 +139,9 @@ export function isBuildingScheduler(calling: CallingType | undefined, names: Cal
   return matches(calling.name) || names.some((name) => name.calling_type_id === calling.id && matches(name.previous_name));
 }
 
-export function compareCallingOrder(a: Organization | CallingType, b: Organization | CallingType) {
+type OrderedCallingName = Pick<CallingType, "name" | "sort_order">;
+
+export function compareCallingOrder(a: OrderedCallingName, b: OrderedCallingName) {
   return (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER)
     || a.name.localeCompare(b.name);
 }
@@ -155,7 +161,7 @@ export function abbreviatedUnitName(unit: Unit) {
   return name.split(/\s+/).map((word) => Array.from(word)[0]).join("").toUpperCase();
 }
 
-export function unitPath(unit: Unit, units: Map<string, Unit>, format: "full" | "dropdown" = "full") {
+export function unitLineage(unit: Unit, units: Map<string, Unit>) {
   const path = [unit];
   const seen = new Set([unit.id]);
   let parent = units.get(unit.parent_id ?? "");
@@ -164,6 +170,11 @@ export function unitPath(unit: Unit, units: Map<string, Unit>, format: "full" | 
     path.unshift(parent);
     parent = units.get(parent.parent_id ?? "");
   }
+  return path;
+}
+
+export function unitPath(unit: Unit, units: Map<string, Unit>, format: "full" | "dropdown" = "full") {
+  const path = unitLineage(unit, units);
   const abbreviate = format === "dropdown" && path.length > 2;
   return path.map((entry) => abbreviate ? abbreviatedUnitName(entry) : entry.name).join(" / ");
 }

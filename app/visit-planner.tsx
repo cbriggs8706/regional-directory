@@ -13,6 +13,7 @@ import { VisitCalendar } from "./visit-calendar";
 import { scheduledMessage, VisitEditor, type VisitEditorEntry } from "./visit-editor";
 import { languageColor } from "../lib/language-colors";
 import { UnitLanguageBadges } from "./unit-facts";
+import { SectionSkeleton } from "./pending-content";
 
 const weekLabel = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
 const views = { rolling: "3 months", month: "Month", week: "Week" } as const;
@@ -172,14 +173,14 @@ export function VisitPlanner({ directory, userId }: { directory: Directory; user
           <label className="check"><input type="checkbox" checked={allDays}
             onChange={(event) => setAllDays(event.target.checked)} />All days</label>
         </div>
-        <p className="visit-calendar-caption field-help">Mountain Time · {loaded ? "Click a time to add a driving block." : "Loading visits…"}</p>
+        <p className="visit-calendar-caption field-help">Mountain Time{loaded && " · Click a time to add a driving block."}</p>
         {loaded && result.error && <p className="notice error" role="alert">{result.error} <button className="text-button" onClick={() => setReload((value) => value + 1)}>Retry</button></p>}
-        <VisitCalendar days={days} events={events} units={units} userId={userId} draggedUnit={draggedUnit}
+        {loaded ? <VisitCalendar days={days} events={events} units={units} userId={userId} draggedUnit={draggedUnit}
           addDrive={(day, minute) => setEditor({ day, minute })}
           dropUnit={dropUnit} resize={resize} openEvent={(event) => {
             const unit = units.get(event.unit_id ?? "");
             if (unit || event.kind === "drive") setEditor({ unit, day: event.event_date, event });
-          }} />
+          }} /> : <SectionSkeleton label="visits" chart />}
       </div>
     </div>
     {editor && <VisitEditor entry={editor} editable={!editor.event || editor.event.owner_id === userId}

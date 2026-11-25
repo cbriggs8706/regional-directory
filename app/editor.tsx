@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type ReactNode } from "react";
 import Image from "next/image";
 import { X } from "lucide-react";
 import { focusTypes, focusTypeLabels, type FocusType } from "../lib/focus-people";
@@ -38,6 +38,7 @@ export function Modal({ title, close, children, className }: {
   title: string; close: () => void; children: ReactNode; className?: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const element = dialog.current;
     element?.showModal();
@@ -45,8 +46,8 @@ export function Modal({ title, close, children, className }: {
   }, []);
 
   return (
-    <dialog ref={dialog} className={className} aria-labelledby="modal-title" onCancel={(event) => { event.preventDefault(); close(); }}>
-      <div className="modal-heading"><h2 id="modal-title">{title}</h2>
+    <dialog ref={dialog} className={className} aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); close(); }}>
+      <div className="modal-heading"><h2 id={titleId}>{title}</h2>
         <button type="button" className="icon-button" aria-label="Close dialog" onClick={close}><X size={20} /></button>
       </div>
       {children}
@@ -54,7 +55,7 @@ export function Modal({ title, close, children, className }: {
   );
 }
 
-function ContactFields({ contact }: { contact?: Contact }) {
+export function ContactFields({ contact }: { contact?: Contact }) {
   const [fields, setFields] = useState({
     name: contact?.name ?? "",
     phone: contact?.phone ?? "",
@@ -101,6 +102,23 @@ function ContactFields({ contact }: { contact?: Contact }) {
         onChange={(event) => setFields({ ...fields, email: event.target.value })} />
     </label>
   </>;
+}
+
+function CongregationOptions({ units }: { units: Unit[] }) {
+  const unitsById = new Map(units.map((unit) => [unit.id, unit]));
+  return units.filter(({ kind }) => hasSacramentMeeting(kind))
+    .map((unit) => ({ unit, path: unitPath(unit, unitsById) }))
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .map(({ unit }) => <option key={unit.id} value={unit.id}>{unitPath(unit, unitsById, "dropdown")}</option>);
+}
+
+export function HomeWardField({ units, currentId }: { units: Unit[]; currentId?: string | null }) {
+  return <label>Home Ward <span className="optional">optional</span>
+    <select name="home_ward_id" defaultValue={currentId ?? ""}>
+      <option value="">None</option>
+      <CongregationOptions units={units} />
+    </select>
+  </label>;
 }
 
 export function Editor({ state, directory, close }: { state: EditorState; directory: Directory; close: () => void }) {
@@ -212,7 +230,11 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
     let values: object;
     switch (state.resource) {
       case "contacts": {
-        const contactDetails = { email: optional("email"), phone: optional("phone") };
+        const homeWardId = optional("home_ward_id");
+        const contactDetails = {
+          email: optional("email"), phone: optional("phone"),
+          ...(homeWardId || contact?.home_ward_id ? { home_ward_id: homeWardId } : {}),
+        };
         values = focusType ? {
           ...contactDetails, focus_type: focusType, first_name: value("first_name"), last_name: value("last_name"),
           ward_id: value("ward_id"), is_whatsapp: data.has("is_whatsapp"), baptized_on: optional("baptized_on"),
@@ -287,6 +309,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             new_contact_name: newContact ? optional("name") : null,
             new_contact_phone: newContact ? optional("phone") : null,
             new_contact_email: newContact ? optional("email") : null,
+            new_contact_home_ward_id: newContact ? optional("home_ward_id") : null,
             building_ids: buildingIds ?? [],
           }));
           return;
@@ -331,13 +354,10 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             {focusType ? <>
               <label>First name<input name="first_name" autoComplete="given-name" defaultValue={contact?.first_name ?? ""} maxLength={148} required /></label>
               <label>Last name<input name="last_name" autoComplete="family-name" defaultValue={contact?.last_name ?? ""} maxLength={148} required /></label>
-              <label>Ward or branch
+              <label>Assigned ward or branch
                 <select name="ward_id" defaultValue={contact?.ward_id ?? ward?.id ?? ""} required>
                   <option value="">Choose a ward or branch</option>
-                  {directory.units.filter(({ kind }) => hasSacramentMeeting(kind))
-                    .map((unit) => ({ unit, path: unitPath(unit, units) }))
-                    .sort((a, b) => a.path.localeCompare(b.path))
-                    .map(({ unit }) => <option key={unit.id} value={unit.id}>{unitPath(unit, units, "dropdown")}</option>)}
+                  <CongregationOptions units={directory.units} />
                 </select>
               </label>
               <label>Date Baptized <span className="optional">optional</span>
@@ -359,6 +379,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
                 <input name="pid" type="text" pattern="[A-Za-z0-9]+" defaultValue={contact?.pid ?? ""} />
               </label>
             </> : <ContactFields contact={contact} />}
+            <HomeWardField units={directory.units} currentId={contact?.home_ward_id} />
           </>}
           {state.resource === "units" && <>
             <label>Unit name<input name="name" defaultValue={state.row?.name} maxLength={150} required /></label>
@@ -561,7 +582,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
                 {contact.name}{contact.email ? ` · ${contact.email}` : ""}
               </option>)}
             </select></label>
-            {newContact && <ContactFields />}
+            {newContact && <><ContactFields /><HomeWardField units={directory.units} /></>}
             {canAssignBuildings && <fieldset>
               <legend>Buildings <span className="optional">optional</span></legend>
               {buildingOptions.length ? <div className="assignment-building-options">

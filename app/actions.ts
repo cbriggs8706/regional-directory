@@ -38,6 +38,7 @@ const validConferenceDates = ({ begins_on, ends_on }: { begins_on: string; ends_
 const meetingTime = z.iso.time({ precision: -1 }).nullable().optional();
 const assignmentDetails = { sustained_on: date, released_on: date, assignment_labels: z.array(z.string().trim().min(1)) };
 const buildingIds = z.array(uuid);
+const homeWard = uuid.nullable().optional();
 const schemas = {
   units: z.object({
     name, kind: z.enum(["region", "council", "stake", "ward", "branch"]),
@@ -65,10 +66,10 @@ const schemas = {
   ward_conferences: z.object({ unit_id: uuid, ...conferenceDates }).refine(validConferenceDates),
   languages: z.object({ name, color: z.enum(languageColors) }),
   contacts: z.discriminatedUnion("focus_type", [
-    z.object({ focus_type: z.undefined().optional(), name, email: email.nullable(), phone }),
+    z.object({ focus_type: z.undefined().optional(), name, email: email.nullable(), phone, home_ward_id: homeWard }),
     z.object({
       focus_type: z.enum(focusTypes), first_name: name, last_name: name, email: email.nullable(), phone,
-      ward_id: uuid, is_whatsapp: z.boolean(), baptized_on: date,
+      ward_id: uuid, home_ward_id: homeWard, is_whatsapp: z.boolean(), baptized_on: date,
       helper_number: z.string().trim().regex(/^[0-9]+$/).nullable(),
       pid: z.string().trim().regex(/^[A-Za-z0-9]+$/).nullable(),
     }).refine(({ first_name, last_name }) => first_name.length + last_name.length < 150)
@@ -94,6 +95,9 @@ function databaseError(error: { code: string; message: string }) {
   }
   if (error.code === "23503" && error.message.includes("contacts_ward_fk")) {
     return "Choose an existing ward or branch. Reassign any focus people before removing their ward or branch.";
+  }
+  if (error.code === "23503" && error.message.includes("contacts_home_ward_fk")) {
+    return "Choose an existing ward or branch for Home Ward.";
   }
   if (error.code === "23503" && error.message.includes("calling_organization_fk")) {
     return "Choose an organization at the same level, or move its callings before removing it.";
@@ -123,6 +127,9 @@ export async function saveRecord(resource: Exclude<Resource, "buildings">, id: s
   if (!parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "website_url")) {
     return { error: "Enter a website URL that starts with http:// or https://." };
   }
+  if (!parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "home_ward_id")) {
+    return { error: "Choose an existing ward or branch for Home Ward." };
+  }
   if (!parsed.success) return { error: resource === "stake_conferences" || resource === "ward_conferences"
     ? "Enter both dates. The end date must be on or after the begin date."
     : resource === "contacts"
@@ -142,7 +149,9 @@ export async function saveRecord(resource: Exclude<Resource, "buildings">, id: s
     ({ error } = result);
   }
   if (resource === "contacts" && (error?.code === "PGRST204" || error?.code === "42703")) {
-    return { error: "Apply the Focus People migration in Supabase to save this person." };
+    return { error: error.message.includes("home_ward_id")
+      ? "Apply the Home Ward migration in Supabase to save this person."
+      : "Apply the Focus People migration in Supabase to save this person." };
   }
   if (resource === "languages" && (error?.code === "PGRST204" || error?.code === "42703")) {
     return { error: "Apply the language colors migration in Supabase to save this language." };
@@ -207,8 +216,10 @@ const newHolderSchema = z.object({
   standard_role: z.object({ group: z.enum(["bishopric", "stake-presidency", "high-council"]), index: z.int().min(0) }).optional(),
   contact_id: uuid.nullable(), new_contact_name: name.nullable(),
   new_contact_phone: phone, new_contact_email: email.nullable(),
+  new_contact_home_ward_id: homeWard,
   ...assignmentDetails, building_ids: buildingIds,
 }).refine(({ contact_id, new_contact_name }) => Boolean(contact_id) !== Boolean(new_contact_name))
+  .refine(({ new_contact_name, new_contact_home_ward_id }) => !new_contact_home_ward_id || Boolean(new_contact_name))
   .refine(({ calling_type_id, standard_role }) => Boolean(calling_type_id) !== Boolean(standard_role));
 
 async function ensureStandardCalling(client: NonNullable<Awaited<ReturnType<typeof getViewer>>>["client"],
@@ -253,11 +264,16 @@ export async function addCallingHolder(values: unknown) {
   if (!viewer?.role) return { error: "You need approved directory access." };
   const holder = newHolderSchema.safeParse(values);
   if (!holder.success) return { error: "Check the person’s name, contact information, and assignment dates." };
-  const { standard_role, calling_type_id, ...details } = holder.data;
+  const { standard_role, calling_type_id, new_contact_home_ward_id, ...details } = holder.data;
   const callingId = standard_role ? await ensureStandardCalling(viewer.client, details.unit_id, standard_role) : calling_type_id;
   if (!callingId) return { error: "Could not set up this calling. Refresh the unit and try again." };
-  const { error } = await viewer.client.rpc("add_calling_holder_with_buildings", { ...details, calling_type_id: callingId });
-  if (error?.code === "PGRST202") return { error: "Apply the Calling Organizations migration in Supabase before saving assignments." };
+  const { error } = await viewer.client.rpc("add_calling_holder_with_buildings", {
+    ...details, calling_type_id: callingId,
+    ...(new_contact_home_ward_id ? { new_contact_home_ward_id } : {}),
+  });
+  if (error?.code === "PGRST202") return { error: new_contact_home_ward_id
+    ? "Apply the Home Ward migration in Supabase before saving this assignment."
+    : "Apply the Calling Organizations migration in Supabase before saving assignments." };
   if (error) return { error: databaseError(error) };
   revalidateDirectory();
   return { error: null };
