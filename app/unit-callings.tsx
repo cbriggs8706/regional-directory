@@ -1,19 +1,32 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { ChevronDown, Pencil, Plus, UserRound } from "lucide-react";
 import {
-  compareCallingOrder, type Assignment, type CallingType, type Directory, type Position, type Unit,
+  compareCallingOrder, type Assignment, type CallingType, type Directory, type Organization, type Position, type Unit,
 } from "../lib/directory";
 import { AssignmentBuildings } from "./assignment-buildings";
-import type { EditorState } from "./editor";
+import { Modal, type EditorState } from "./editor";
+import { standardCallingGroups, standardGroupFor, standardGroupsForUnit, standardRoleIndex, type StandardCallingGroup } from "../lib/standard-callings";
+import { UnitSectionHeading } from "./unit-section-heading";
 
 const dateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
 export function UnitCallings({ unit, directory, edit, title }: {
   unit: Unit; directory: Directory; edit: (state: EditorState) => void; title: string;
 }) {
+  const [managing, setManaging] = useState<string | null>(null);
   const organizations = directory.organizations.filter((organization) => organization.level === unit.level).sort(compareCallingOrder);
+  const groups: { key: string; name: string; organization?: Organization; template?: StandardCallingGroup }[] =
+    organizations.map((organization) => ({
+      key: organization.id, name: organization.name, organization, template: standardGroupFor(organization.name, organization.level),
+    }));
+  for (const template of standardGroupsForUnit(unit.kind)) {
+    if (!groups.some((group) => group.template === template)) {
+      groups.push({ key: template, name: standardCallingGroups[template].name, template });
+    }
+  }
   const callings = directory.calling_types.filter((calling) => calling.level === unit.level).sort(compareCallingOrder);
   const positions = new Map(directory.positions.filter((position) => position.unit_id === unit.id)
     .map((position) => [position.calling_type_id, position]));
@@ -55,62 +68,127 @@ export function UnitCallings({ unit, directory, edit, title }: {
     </li>;
   }
 
-  return <section aria-labelledby="unit-callings-heading">
-    <h2 className="unit-section-heading" id="unit-callings-heading">{title}</h2>
-    {callings.length === 0 ? <div className="panel empty"><h3>No callings yet</h3>
+  function addHolder(calling: CallingType, position?: Position) {
+    edit(position ? { resource: "assignments", position } : { resource: "assignments", unit, callingType: calling });
+  }
+
+  function vacantCard(key: string, name: string, add: () => void, retired = false) {
+    const element = <li key={key} className="panel unit-holder-vacant">
+      {retired ? <div className="unit-vacancy-content"><strong>{name}</strong><small>Retired</small></div>
+        : <button type="button" className="unit-vacancy-content unit-vacancy-add" onClick={add} aria-label={`Add holder for ${name}`}>
+          <span className="unit-holder-icon"><Plus size={19} aria-hidden /></span>
+          <strong>{name}</strong>
+        </button>}
+    </li>;
+    return { element, vacancy: !retired };
+  }
+
+  return <section className="unit-tab-section" aria-labelledby="unit-callings-heading">
+    <UnitSectionHeading id="unit-callings-heading" title={title} unit={unit} />
+    {groups.length === 0 ? <div className="panel empty"><h3>No callings yet</h3>
       <Link href="/?tab=callings">Manage organizations and callings</Link>
     </div> : <div className="calling-list unit-callings-list">
-      {organizations.map((organization) => {
-        const roles = callings.filter((calling) => calling.organization_id === organization.id).map((calling) => {
+      {groups.map(({ key, name, organization, template }) => {
+        const roles = callings.filter((calling) => calling.organization_id === organization?.id).map((calling) => {
           const position = positions.get(calling.id);
           const holders = position ? assignmentsByPosition.get(position.id) ?? [] : [];
           const current = holders.filter((assignment) => !assignment.released_on)
             .sort((a, b) => holderName(a).localeCompare(holderName(b)));
-          return { calling, position, current, holders };
+          const cards = position && current.length > 0
+            ? current.map((assignment) => ({ element: holderCard(assignment, calling, position), vacancy: false }))
+            : [vacantCard(calling.id, calling.name, () => addHolder(calling, position), Boolean(position?.retired_on))];
+          return { calling, position, current, holders, cards };
         });
-        if (roles.length === 0) return null;
-
-        const current = roles.flatMap(({ calling, position, current }) => position
-          ? current.map((assignment) => ({ calling, position, assignment })) : []);
         const past = roles.flatMap(({ calling, position, holders }) => position
           ? holders.filter((assignment) => assignment.released_on).map((assignment) => ({ calling, position, assignment })) : [])
           .sort((a, b) => (b.assignment.released_on ?? "").localeCompare(a.assignment.released_on ?? ""));
 
-        return <section className="unit-calling" key={organization.id} aria-labelledby={`unit-organization-${organization.id}`}>
+        let cards = roles.flatMap((role) => role.cards);
+        if (template && standardCallingGroups[template].kind === unit.kind) {
+          const standard = standardCallingGroups[template];
+          const numbered = new Map<number, typeof roles[number]>();
+          for (const role of roles) {
+            const index = standardRoleIndex(template, role.calling.name);
+            if (index >= 0 && index < standard.roles.length && !numbered.has(index)) numbered.set(index, role);
+          }
+          const numberedRoles = new Set(numbered.values());
+          const unnumbered = roles.filter((role) => !numberedRoles.has(role));
+          const shared = unnumbered.filter(({ calling, position }) => !position?.retired_on && (template === "high-council"
+            ? /council|member/i.test(calling.name) && !/clerk|secretary/i.test(calling.name)
+            : /coun[sc]ell?or/i.test(calling.name)));
+          const sharedRoles = new Set(shared);
+          const unassignedCards = shared.flatMap((role) => role.cards);
+          const multiHolder = template === "high-council" ? shared.find(({ calling, position }) =>
+            position?.multiple_holders ?? calling.default_multiple_holders) : undefined;
+
+          cards = standard.roles.flatMap((title, index) => {
+            const configured = numbered.get(index);
+            if (configured) return configured.cards;
+            const sharedCard = unassignedCards.shift();
+            if (sharedCard) return [sharedCard];
+            return [vacantCard(`${template}-${index}`, title, () => {
+              if (multiHolder) addHolder(multiHolder.calling, multiHolder.position);
+              else edit({ resource: "assignments", unit, standardRole: { group: template, index } });
+            })];
+          });
+          cards.push(...unassignedCards, ...unnumbered.filter((role) => !sharedRoles.has(role)).flatMap((role) => role.cards));
+        }
+        if (template === "high-council") {
+          const nextVacancy = cards.find((card) => card.vacancy);
+          cards = cards.filter((card) => !card.vacancy);
+          if (nextVacancy) cards.push(nextVacancy);
+        }
+
+        function openEditor(state: EditorState) {
+          setManaging(null);
+          edit(state);
+        }
+
+        return <section className="unit-calling" key={key} aria-labelledby={`unit-organization-${key}`}>
           <div className="unit-calling-heading">
-            <h3 id={`unit-organization-${organization.id}`}>{organization.name}</h3>
+            <h3 id={`unit-organization-${key}`}>{name}</h3>
+            <button type="button" className="icon-button" aria-label={`Edit ${name}`} title={`Edit ${name}`}
+              onClick={() => setManaging(key)}><Pencil size={16} aria-hidden /></button>
           </div>
-          {current.length ? <ul className="unit-holder-grid" aria-label="Current holders">
-            {current.map(({ assignment, calling, position }) => holderCard(assignment, calling, position))}
-          </ul> : <p className="muted">No current holders.</p>}
-          <details className="unit-calling-details">
-            <summary className="text-button"><ChevronDown size={16} aria-hidden />Manage callings</summary>
-            <ul className="management-list unit-calling-roles">
-              {roles.map(({ calling, position, current }) => {
-                const addPast = Boolean(position?.retired_on || (current.length && !position?.multiple_holders));
-                return <li key={calling.id}>
-                  <div><strong>{calling.name}</strong>
-                    {position?.retired_on ? <small>Retired {dateFormat.format(new Date(position.retired_on))}</small>
-                      : current.length === 0 && <small>Vacant</small>}
-                  </div>
-                  <button className="button" aria-label={`${addPast ? "Add past holder" : "Add holder"} for ${calling.name}`}
-                    onClick={() => edit(position ? { resource: "assignments", position } : { resource: "assignments", unit, callingType: calling })}>
-                    <Plus size={16} aria-hidden />{addPast ? "Add past holder" : "Add holder"}
-                  </button>
-                  {position && <button className="icon-button" aria-label={`Edit calling settings for ${calling.name}`}
-                    title="Edit calling settings" onClick={() => edit({ resource: "positions", row: position })}>
-                    <Pencil size={16} aria-hidden />
-                  </button>}
-                </li>;
-              })}
-            </ul>
-          </details>
+          {cards.length ? <ul className="unit-holder-grid" aria-label={`${name} calling holders and vacancies`}>
+            {cards.map(({ element }) => element)}
+          </ul>
+            : <p className="muted">No callings yet.</p>}
           {past.length > 0 && <details className="unit-calling-details">
             <summary className="text-button"><ChevronDown size={16} aria-hidden />Past holders ({past.length})</summary>
             <ul className="unit-holder-grid" aria-label="Past holders">
               {past.map(({ assignment, calling, position }) => holderCard(assignment, calling, position))}
             </ul>
           </details>}
+          {managing === key && <Modal title={`Edit ${name}`} close={() => setManaging(null)}>
+            <div className="modal-body stack">
+              <div className="toolbar">
+                <button type="button" className="button" onClick={() => openEditor({
+                  resource: "organizations", row: organization, defaults: { name, level: unit.level },
+                })}>{organization ? "Edit organization" : "Set up organization"}</button>
+                {organization && <button type="button" className="button"
+                  onClick={() => openEditor({ resource: "calling_types", organization })}>Add calling</button>}
+              </div>
+              {roles.length > 0 && <ul className="management-list unit-calling-roles">
+                {roles.map(({ calling, position, current }) => {
+                  const addPast = Boolean(position?.retired_on || (current.length && !position?.multiple_holders));
+                  return <li key={calling.id}>
+                    <div><strong>{calling.name}</strong>
+                      {position?.retired_on && <small>Retired {dateFormat.format(new Date(position.retired_on))}</small>}
+                    </div>
+                    <button type="button" className="button" aria-label={`${addPast ? "Add past holder" : "Add holder"} for ${calling.name}`}
+                      onClick={() => openEditor(position ? { resource: "assignments", position } : { resource: "assignments", unit, callingType: calling })}>
+                      {addPast ? "Add past holder" : "Add holder"}
+                    </button>
+                    {position && <button type="button" className="icon-button" aria-label={`Edit calling settings for ${calling.name}`}
+                      title="Edit calling settings" onClick={() => openEditor({ resource: "positions", row: position })}>
+                      <Pencil size={16} aria-hidden />
+                    </button>}
+                  </li>;
+                })}
+              </ul>}
+            </div>
+          </Modal>}
         </section>;
       })}
     </div>}

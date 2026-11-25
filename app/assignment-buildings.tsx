@@ -1,4 +1,5 @@
 import { formatBuildingAddress, type Assignment, type Building } from "../lib/directory";
+import { AddressLink } from "./address-link";
 
 export function AssignmentBuildings({ assignment, buildings }: { assignment: Assignment; buildings: Map<string, Building> }) {
   const addresses = assignment.assignment_buildings?.flatMap(({ building_id }) => {
@@ -10,7 +11,7 @@ export function AssignmentBuildings({ assignment, buildings }: { assignment: Ass
   return <div>
     <small><strong>Buildings</strong></small>
     <ul aria-label="Assigned buildings">
-      {addresses.map(({ id, address }) => <li key={id}><small>{address}</small></li>)}
+      {addresses.map(({ id, address }) => <li key={id}><small><AddressLink address={address} /></small></li>)}
     </ul>
   </div>;
 }

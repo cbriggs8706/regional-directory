@@ -4,14 +4,15 @@ import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type 
 import Image from "next/image";
 import { X } from "lucide-react";
 import { focusTypes, focusTypeLabels, type FocusType } from "../lib/focus-people";
-import { addCallingHolder, deleteRecord, saveBuilding, saveRecord, saveSchedulerAssignment, type Resource } from "./actions";
+import { addCallingHolder, addStakeUnits, deleteRecord, saveBuilding, saveRecord, saveSchedulerAssignment, type Resource } from "./actions";
 import {
   buildingPhotoMaxBytes, buildingPhotoTypes, buildingPhotoUrl, formatBuildingAddress,
   callingLevelLabel, callingLevels, callingPath, compareCallingOrder, hasSacramentMeeting, isBuildingScheduler, parentKinds, unitLabels, unitPath,
   type Assignment, type Building, type CallingLevel, type CallingType, type Contact, type Directory, type Language, type Organization, type Position,
   type Conference, type Unit, type UnitKind,
 } from "../lib/directory";
-import { languageColorKey } from "./language-badge";
+import { languageColor, languageColors, type LanguageColor } from "../lib/language-colors";
+import { standardCallingGroups, type StandardCalling } from "../lib/standard-callings";
 
 export type EditorState =
   | { resource: "contacts"; row?: Contact; ward?: Unit }
@@ -19,11 +20,12 @@ export type EditorState =
   | { resource: "buildings"; row?: Building }
   | { resource: "stake_conferences" | "ward_conferences"; row?: Conference; unit: Unit }
   | { resource: "languages"; row?: Language }
-  | { resource: "organizations"; row?: Organization }
+  | { resource: "organizations"; row?: Organization; defaults?: Pick<Organization, "name" | "level"> }
   | { resource: "calling_types"; row?: CallingType; organization?: Organization }
   | { resource: "positions"; row?: Position; callingType?: CallingType }
   | { resource: "assignments"; row?: Assignment; position: Position }
   | { resource: "assignments"; row?: never; position?: never; unit: Unit; callingType: CallingType }
+  | { resource: "assignments"; row?: never; position?: never; unit: Unit; callingType?: never; standardRole: StandardCalling }
   | { resource: "directory_access"; revoke?: string };
 
 const labels = {
@@ -108,16 +110,20 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
   const contact = state.resource === "contacts" ? state.row : undefined;
   const ward = state.resource === "contacts" ? state.ward : undefined;
   const [focusType, setFocusType] = useState<FocusType | "">(contact?.focus_type ?? (ward ? "recent_convert" : ""));
-  const recordLabel = conference ? `${unitLabels[conference.unit.kind]} conference` : focusType ? "Focus person" : labels[resource];
+  const stake = state.resource === "units" && state.row?.kind === "stake" ? state.row : undefined;
+  const recordLabel = conference ? `${unitLabels[conference.unit.kind]} conference` : focusType ? "Focus person" : stake ? "Stake" : labels[resource];
   const revoke = resource === "directory_access" ? state.revoke : undefined;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [unitAddError, setUnitAddError] = useState("");
+  const [unitAddStatus, setUnitAddStatus] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(Boolean(revoke));
   const [kind, setKind] = useState<UnitKind>(
     state.resource === "units" ? state.row?.kind ?? (state.parent ? "council" : "region") : "region",
   );
   const canHaveWebsite = kind === "stake" || hasSacramentMeeting(kind);
   const [unitLanguage, setUnitLanguage] = useState(state.resource === "units" ? state.row?.language_id ?? "" : "");
+  const [badgeColor, setBadgeColor] = useState(state.resource === "languages" ? languageColor(state.row) ?? "gray" : "gray");
   const [sacramentFirst, setSacramentFirst] = useState(
     state.resource !== "units" || state.row?.sacrament_meeting_first == null ? ""
       : state.row.sacrament_meeting_first ? "yes" : "no",
@@ -130,7 +136,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
   const [level, setLevel] = useState<CallingLevel>(
     (state.resource === "positions" ? state.row?.level ?? state.callingType?.level :
       state.resource === "calling_types" ? state.row?.level ?? state.organization?.level :
-      state.resource === "organizations" ? state.row?.level : undefined) ?? "ward",
+      state.resource === "organizations" ? state.row?.level ?? state.defaults?.level : undefined) ?? "ward",
   );
   const [retired, setRetired] = useState(Boolean(state.resource === "positions" && state.row?.retired_on));
   const [newContact, setNewContact] = useState(false);
@@ -169,6 +175,29 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
       else close();
     } catch {
       setError("The request could not be completed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitStakeUnits(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!stake || busy) return;
+    const form = event.currentTarget;
+    setBusy(true);
+    setUnitAddError("");
+    setUnitAddStatus("");
+    try {
+      const result = await addStakeUnits(stake.id, new FormData(form));
+      if (result.error !== null) {
+        setUnitAddError(result.error);
+      } else {
+        form.reset();
+        const message = `Added ${result.added} ${result.added === 1 ? "unit" : "units"}.`;
+        setUnitAddStatus(result.skipped ? `${message} Skipped ${result.skipped} ${result.skipped === 1 ? "duplicate" : "duplicates"}.` : message);
+      }
+    } catch {
+      setUnitAddError("Could not save the units. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -226,7 +255,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
           begins_on: value("begins_on"), ends_on: value("ends_on"),
         };
         break;
-      case "languages": values = { name: value("name") }; break;
+      case "languages": values = { name: value("name"), color: badgeColor }; break;
       case "organizations":
         values = { name: value("name"), level, sort_order: optional("sort_order") === null ? null : Number(value("sort_order")) };
         break;
@@ -250,9 +279,10 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
         const buildingIds = canAssignBuildings ? data.getAll("building_ids") : undefined;
         if (!state.row) {
           const unitId = state.position ? state.position.unit_id : state.unit.id;
-          const callingTypeId = state.position ? state.position.calling_type_id : state.callingType.id;
+          const callingTypeId = state.position ? state.position.calling_type_id : state.callingType?.id;
+          const standardRole = "standardRole" in state ? state.standardRole : undefined;
           await run(() => addCallingHolder({
-            unit_id: unitId, calling_type_id: callingTypeId, ...details,
+            unit_id: unitId, calling_type_id: callingTypeId, standard_role: standardRole, ...details,
             contact_id: newContact ? null : optional("contact_id"),
             new_contact_name: newContact ? optional("name") : null,
             new_contact_phone: newContact ? optional("phone") : null,
@@ -289,7 +319,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             }}>{busy ? "Working…" : revoke ? "Revoke access" : "Delete record"}</button>
           </div>
         </div>
-      ) : (
+      ) : <>
         <form className="modal-body stack" onSubmit={submit}>
           {state.resource === "contacts" && <>
             <label>Person type
@@ -332,7 +362,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
           </>}
           {state.resource === "units" && <>
             <label>Unit name<input name="name" defaultValue={state.row?.name} maxLength={150} required /></label>
-            <label>Unit level<select value={kind} disabled={lockKind} onChange={(event) => setKind(event.target.value as UnitKind)}>
+            <label>Unit level<select value={kind} disabled={busy || lockKind} onChange={(event) => setKind(event.target.value as UnitKind)}>
               {Object.entries(unitLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select></label>
             {kind !== "region" && <label>Parent {unitLabels[parentKinds[kind]].toLowerCase()}
@@ -357,14 +387,14 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             </label>
             {hasSacramentMeeting(kind) && <>
               <label>Language<select name="language_id" value={unitLanguage}
-                data-language={languageColorKey(languages.find((language) => language.id === unitLanguage)?.name)} onChange={(event) => {
+                data-language-color={languageColor(languages.find((language) => language.id === unitLanguage))} onChange={(event) => {
                 const selectedLanguage = event.target.value;
                 setUnitLanguage(selectedLanguage);
                 if (selectedLanguage === subCongregationLanguage) setSubCongregationLanguage("");
               }}>
                 <option value="">Not set</option>
                 {languages.map((language) =>
-                  <option key={language.id} value={language.id} data-language={languageColorKey(language.name)}>{language.name}</option>)}
+                  <option key={language.id} value={language.id} data-language-color={languageColor(language)}>{language.name}</option>)}
               </select></label>
               <label className="check">
                 <input type="checkbox" checked={hasSubCongregation} onChange={(event) => setHasSubCongregation(event.target.checked)} />
@@ -372,11 +402,11 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               </label>
               {hasSubCongregation && <label>Sub-congregation language
                 <select name="sub_congregation_language_id" value={subCongregationLanguage} required
-                  data-language={languageColorKey(languages.find((language) => language.id === subCongregationLanguage)?.name)}
+                  data-language-color={languageColor(languages.find((language) => language.id === subCongregationLanguage))}
                   onChange={(event) => setSubCongregationLanguage(event.target.value)}>
                   <option value="">Choose a language</option>
                   {languages.filter((language) => language.id !== unitLanguage).map((language) =>
-                    <option key={language.id} value={language.id} data-language={languageColorKey(language.name)}>{language.name}</option>)}
+                    <option key={language.id} value={language.id} data-language-color={languageColor(language)}>{language.name}</option>)}
                 </select>
               </label>}
               <label>Sacrament meeting start time
@@ -444,9 +474,19 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               <input type="date" name="ends_on" defaultValue={conference.row?.ends_on} min={conferenceStart || undefined} required />
             </label>
           </>}
-          {state.resource === "languages" && <label>Language name
-            <input name="name" defaultValue={state.row?.name} maxLength={150} required />
-          </label>}
+          {state.resource === "languages" && <>
+            <label>Language name
+              <input name="name" defaultValue={state.row?.name} maxLength={150} required />
+            </label>
+            <label>Badge color
+              <select value={badgeColor} data-language-color={badgeColor}
+                onChange={(event) => setBadgeColor(event.target.value as LanguageColor)}>
+                {languageColors.map((color) => <option key={color} value={color} data-language-color={color}>
+                  {color[0].toUpperCase() + color.slice(1)}
+                </option>)}
+              </select>
+            </label>
+          </>}
           {(state.resource === "organizations" || state.resource === "calling_types" || state.resource === "positions") && (
             <label>Calling level<select value={level} disabled={hasAssignments || lockLevel || Boolean(state.resource === "positions" && state.callingType)}
               onChange={(event) => setLevel(event.target.value as CallingLevel)}>
@@ -454,7 +494,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             </select></label>
           )}
           {state.resource === "organizations" && <>
-            <label>Organization name<input name="name" defaultValue={state.row?.name} maxLength={150} required /></label>
+            <label>Organization name<input name="name" defaultValue={state.row?.name ?? state.defaults?.name} maxLength={150} required /></label>
             <label>Display order <span className="optional">optional</span>
               <input name="sort_order" type="number" min={1} max={2147483647} defaultValue={state.row?.sort_order ?? ""} />
               <span className="field-help">Lower numbers appear first. Organizations without a number appear alphabetically at the end.</span>
@@ -511,7 +551,8 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
           {state.resource === "assignments" && <>
             <p>{state.position
               ? `${typeNames.get(state.position.calling_type_id)} · ${units.get(state.position.unit_id)?.name}`
-              : `${callingPath(state.callingType, organizations)} · ${state.unit.name}`}</p>
+              : `${state.callingType ? callingPath(state.callingType, organizations)
+                : standardCallingGroups[state.standardRole.group].roles[state.standardRole.index]} · ${state.unit.name}`}</p>
             <label>Person<select name="contact_id" defaultValue={state.row?.contact_id ?? ""} disabled={Boolean(state.row)} required
               onChange={(event) => setNewContact(event.target.value === "new")}>
               <option value="">Choose a contact</option>
@@ -550,7 +591,18 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             <button className="button primary" disabled={busy}>{busy ? "Saving…" : resource === "directory_access" ? "Grant access" : "Save changes"}</button>
           </div>
         </form>
-      )}
+        {stake && kind === "stake" && <form className="modal-body stack stake-add-units" onSubmit={submitStakeUnits}>
+          <fieldset disabled={busy}>
+            <legend>Add wards and branches</legend>
+            <p className="field-help">Type or paste one unit name per line.</p>
+            <label>Wards<textarea name="wards" rows={3} /></label>
+            <label>Branches<textarea name="branches" rows={3} /></label>
+            {unitAddError && <p className="notice error" role="alert">{unitAddError}</p>}
+            {unitAddStatus && <p className="notice" role="status">{unitAddStatus}</p>}
+            <div className="form-actions"><button type="submit" className="button primary">Add units</button></div>
+          </fieldset>
+        </form>}
+      </>}
     </Modal>
   );
 }

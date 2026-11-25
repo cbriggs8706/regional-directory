@@ -1,11 +1,13 @@
 import { notFound } from "next/navigation";
 import { DirectoryApp } from "./directory-app";
+import type { DirectoryManagementSection } from "./directory-management";
 import type { getViewer } from "../lib/supabase";
 import type { Directory, WardConference } from "../lib/directory";
 import { scopeWards, type FamilyHistoryReport } from "../lib/family-history";
 import { focusMetrics, type FocusActivity, type FocusActivityData } from "../lib/focus-people";
 import type { GetInvolvedReport } from "../lib/get-involved";
 import { journalPageSize, type UnitJournalData } from "../lib/unit-journal";
+import { visitClock, type UnitVisitData, type VisitEvent } from "../lib/visits";
 
 type Viewer = NonNullable<Awaited<ReturnType<typeof getViewer>>>;
 
@@ -19,6 +21,19 @@ async function loadWardConferences(client: Viewer["client"], unitId?: string): P
     if (error) throw new Error("Could not load ward conferences.");
     conferences.push(...data as WardConference[]);
     if (data.length < 500) return conferences;
+  }
+}
+
+async function loadUnitVisits(client: Viewer["client"], unitId: string): Promise<UnitVisitData> {
+  const clock = visitClock();
+  const events: VisitEvent[] = [];
+  for (let start = 0; ; start += 500) {
+    const { data, error } = await client.from("visit_events")
+      .select("id,owner_id,owner_email,unit_id,title,event_date,kind,start_minute,end_minute")
+      .eq("unit_id", unitId).order("event_date").order("id").range(start, start + 499);
+    if (error) return { ...clock, events: [], loadError: "Could not load scheduled visits." };
+    events.push(...data as VisitEvent[]);
+    if (data.length < 500) return { ...clock, events, loadError: null };
   }
 }
 
@@ -84,10 +99,11 @@ async function loadUnitJournal(client: Viewer["client"], unitId: string, page?: 
   return { entries: data.slice(0, pageSize), page: page ?? null, hasMore: data.length > pageSize, loadError: null };
 }
 
-export async function DirectoryPage({ viewer, unitId, journalPage }: {
+export async function DirectoryPage({ viewer, unitId, journalPage, managementSection }: {
   viewer: Viewer;
   unitId?: string;
   journalPage?: number;
+  managementSection?: DirectoryManagementSection;
 }) {
   const { client, role, user } = viewer;
   const tables = ["units", "buildings", "stake_conferences", "languages", "contacts", "organizations", "calling_types", "calling_names", "positions", "assignments"] as const;
@@ -111,10 +127,11 @@ export async function DirectoryPage({ viewer, unitId, journalPage }: {
   if (unitId && !unit) notFound();
 
   const wardIds = unit ? scopeWards(units, unit).map(({ id }) => id) : undefined;
-  const [familyHistory, getInvolved, wardConferences, journal, focusActivity, access, recent] = await Promise.all([
-    loadUnitReports(client, "family_history_reports", wardIds),
+  const [familyHistory, getInvolved, wardConferences, unitVisits, journal, focusActivity, access, recent] = await Promise.all([
+    managementSection ? { reports: [], loadError: null } : loadUnitReports(client, "family_history_reports", wardIds),
     wardIds ? loadUnitReports(client, "get_involved_reports", wardIds) : null,
     loadWardConferences(client, unit?.level === "ward" ? unit.id : undefined),
+    unit ? loadUnitVisits(client, unit.id) : null,
     unit ? loadUnitJournal(client, unit.id, journalPage) : null,
     unit?.level === "ward" ? loadFocusActivity(client, unit.id) : null,
     role === "admin" ? client.from("directory_access").select("email,is_admin").order("email") : null,
@@ -136,7 +153,8 @@ export async function DirectoryPage({ viewer, unitId, journalPage }: {
     .formatToParts(new Date());
   const currentMonth = [localDate.find(({ type }) => type === "year")!.value, localDate.find(({ type }) => type === "month")!.value].join("-");
 
-  return <DirectoryApp unitId={unitId} directory={directory} familyHistory={{ ...familyHistory, currentMonth }} admin={role === "admin"} email={user.email ?? ""}
-    userId={user.id} journal={journal} focusActivity={focusActivity} getInvolved={getInvolved}
+  return <DirectoryApp unitId={unitId} managementSection={managementSection} directory={directory}
+    familyHistory={{ ...familyHistory, currentMonth }} admin={role === "admin"} email={user.email ?? ""}
+    userId={user.id} journal={journal} focusActivity={focusActivity} getInvolved={getInvolved} unitVisits={unitVisits}
     mailReady={Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM)} pending={pending} />;
 }

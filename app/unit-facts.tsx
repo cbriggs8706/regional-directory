@@ -1,4 +1,4 @@
-import { hasSacramentMeeting, type Unit } from "../lib/directory";
+import { hasSacramentMeeting, type Language, type Unit } from "../lib/directory";
 import { LanguageBadge } from "./language-badge";
 
 const meetingTimeFormat = new Intl.DateTimeFormat("en-US", { timeStyle: "short", timeZone: "UTC" });
@@ -7,22 +7,22 @@ function formatMeetingTime(time: string) {
   return meetingTimeFormat.format(new Date(`2000-01-01T${time.slice(0, 5)}:00Z`));
 }
 
-type UnitLanguageProps = { unit: Unit; languageNames: Map<string, string> };
+type UnitLanguageProps = { unit: Unit; languagesById: Map<string, Language> };
 
-export function UnitLanguageBadges({ unit, languageNames }: UnitLanguageProps) {
-  const language = unit.language_id && languageNames.get(unit.language_id);
+export function UnitLanguageBadges({ unit, languagesById }: UnitLanguageProps) {
+  const language = unit.language_id && languagesById.get(unit.language_id);
   const subLanguage = unit.has_sub_congregation && unit.sub_congregation_language_id
-    && languageNames.get(unit.sub_congregation_language_id);
+    && languagesById.get(unit.sub_congregation_language_id);
 
   return <>
-    {language && <LanguageBadge name={language} />}
-    {subLanguage && <LanguageBadge name={subLanguage} subCongregation />}
+    {language && <LanguageBadge language={language} />}
+    {subLanguage && <LanguageBadge language={subLanguage} subCongregation />}
   </>;
 }
 
-export function UnitFacts({ unit, languageNames }: UnitLanguageProps) {
+export function UnitFacts({ unit, languagesById }: UnitLanguageProps) {
   return <span className="chips">
-    <UnitLanguageBadges unit={unit} languageNames={languageNames} />
+    <UnitLanguageBadges unit={unit} languagesById={languagesById} />
     {unit.sacrament_meeting_first === false && unit.first_meeting_time && <span className="chip">
       First meeting at {formatMeetingTime(unit.first_meeting_time)}
     </span>}

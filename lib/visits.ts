@@ -20,11 +20,19 @@ export type VisitEvent = {
   end_minute: number;
 };
 
-export function todayInVisitZone() {
+export type UnitVisitData = { events: VisitEvent[]; today: string; minute: number; loadError: string | null };
+
+export function visitClock() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: visitTimeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).formatToParts();
-  return ["year", "month", "day"].map((type) => parts.find((part) => part.type === type)?.value).join("-");
+  const fields = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return { today: `${fields.year}-${fields.month}-${fields.day}`, minute: Number(fields.hour) * 60 + Number(fields.minute) };
+}
+
+export function todayInVisitZone() {
+  return visitClock().today;
 }
 
 export function offsetDate(date: string, days: number) {

@@ -3,9 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { buildingPhotoMaxBytes, buildingPhotoTypes, callingLevels, normalizeEmail } from "../lib/directory";
 import { focusTypes } from "../lib/focus-people";
+import { languageColors } from "../lib/language-colors";
 import { createDirectoryClient, getViewer } from "../lib/supabase";
+import { standardCallingGroups, standardGroupFor, standardRoleIndex, type StandardCalling } from "../lib/standard-callings";
 
 export async function signIn() {
   const client = await createDirectoryClient();
@@ -60,7 +63,7 @@ const schemas = {
   }),
   stake_conferences: z.object({ stake_id: uuid, ...conferenceDates }).refine(validConferenceDates),
   ward_conferences: z.object({ unit_id: uuid, ...conferenceDates }).refine(validConferenceDates),
-  languages: z.object({ name }),
+  languages: z.object({ name, color: z.enum(languageColors) }),
   contacts: z.discriminatedUnion("focus_type", [
     z.object({ focus_type: z.undefined().optional(), name, email: email.nullable(), phone }),
     z.object({
@@ -108,6 +111,8 @@ function databaseError(error: { code: string; message: string }) {
 function revalidateDirectory() {
   revalidatePath("/");
   revalidatePath("/units/[id]", "page");
+  revalidatePath("/buildings");
+  revalidatePath("/languages");
 }
 
 export async function saveRecord(resource: Exclude<Resource, "buildings">, id: string | null, values: unknown) {
@@ -138,6 +143,9 @@ export async function saveRecord(resource: Exclude<Resource, "buildings">, id: s
   }
   if (resource === "contacts" && (error?.code === "PGRST204" || error?.code === "42703")) {
     return { error: "Apply the Focus People migration in Supabase to save this person." };
+  }
+  if (resource === "languages" && (error?.code === "PGRST204" || error?.code === "42703")) {
+    return { error: "Apply the language colors migration in Supabase to save this language." };
   }
   if (error) return { error: databaseError(error) };
   revalidateDirectory();
@@ -195,17 +203,60 @@ export async function saveBuilding(id: string | null, form: FormData) {
 }
 
 const newHolderSchema = z.object({
-  unit_id: uuid, calling_type_id: uuid, contact_id: uuid.nullable(), new_contact_name: name.nullable(),
+  unit_id: uuid, calling_type_id: uuid.optional(),
+  standard_role: z.object({ group: z.enum(["bishopric", "stake-presidency", "high-council"]), index: z.int().min(0) }).optional(),
+  contact_id: uuid.nullable(), new_contact_name: name.nullable(),
   new_contact_phone: phone, new_contact_email: email.nullable(),
   ...assignmentDetails, building_ids: buildingIds,
-}).refine(({ contact_id, new_contact_name }) => Boolean(contact_id) !== Boolean(new_contact_name));
+}).refine(({ contact_id, new_contact_name }) => Boolean(contact_id) !== Boolean(new_contact_name))
+  .refine(({ calling_type_id, standard_role }) => Boolean(calling_type_id) !== Boolean(standard_role));
+
+async function ensureStandardCalling(client: NonNullable<Awaited<ReturnType<typeof getViewer>>>["client"],
+  unitId: string, { group, index }: StandardCalling) {
+  const template = standardCallingGroups[group];
+  const title = template.roles[index];
+  if (!title) return null;
+  const { data: unit } = await client.from("units").select("kind").eq("id", unitId).maybeSingle();
+  if (unit?.kind !== template.kind) return null;
+
+  const organizations = () => client.from("organizations").select("id,name").eq("level", template.level).order("id");
+  const { data: groups, error: lookupError } = await organizations();
+  if (lookupError) return null;
+  let organization = groups.find(({ name }) => standardGroupFor(name, template.level) === group);
+  if (!organization) {
+    const { data, error } = await client.from("organizations").insert({ name: template.name, level: template.level })
+      .select("id,name").single();
+    if (error?.code === "23505") {
+      const { data: refreshed } = await organizations();
+      organization = refreshed?.find(({ name }) => standardGroupFor(name, template.level) === group);
+    } else if (data) organization = data;
+  }
+  if (!organization) return null;
+
+  const { data: roles, error } = await client.from("calling_types").select("id,name")
+    .eq("organization_id", organization.id).order("id");
+  if (error) return null;
+  const existing = roles.find(({ name }) => standardRoleIndex(group, name) === index);
+  if (existing) return existing.id as string;
+
+  // A stable ID lets simultaneous requests set up the same missing calling once.
+  const hash = createHash("sha256").update(`standard-calling:${organization.id}:${group}:${index}`).digest("hex");
+  const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+  const { error: insertError } = await client.from("calling_types").upsert({
+    id, name: title, organization_id: organization.id, level: template.level, default_multiple_holders: false,
+  }, { onConflict: "id", ignoreDuplicates: true });
+  return insertError ? null : id;
+}
 
 export async function addCallingHolder(values: unknown) {
   const viewer = await getViewer();
   if (!viewer?.role) return { error: "You need approved directory access." };
   const holder = newHolderSchema.safeParse(values);
   if (!holder.success) return { error: "Check the person’s name, contact information, and assignment dates." };
-  const { error } = await viewer.client.rpc("add_calling_holder_with_buildings", holder.data);
+  const { standard_role, calling_type_id, ...details } = holder.data;
+  const callingId = standard_role ? await ensureStandardCalling(viewer.client, details.unit_id, standard_role) : calling_type_id;
+  if (!callingId) return { error: "Could not set up this calling. Refresh the unit and try again." };
+  const { error } = await viewer.client.rpc("add_calling_holder_with_buildings", { ...details, calling_type_id: callingId });
   if (error?.code === "PGRST202") return { error: "Apply the Calling Organizations migration in Supabase before saving assignments." };
   if (error) return { error: databaseError(error) };
   revalidateDirectory();

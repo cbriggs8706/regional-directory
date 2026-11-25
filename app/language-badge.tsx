@@ -1,9 +1,8 @@
-export function languageColorKey(name?: string) {
-  return name?.trim().toLowerCase();
-}
+import type { Language } from "../lib/directory";
+import { languageColor } from "../lib/language-colors";
 
-export function LanguageBadge({ name, subCongregation }: { name: string; subCongregation?: boolean }) {
-  return <span className="chip language-badge" data-language={languageColorKey(name)}>
-    {name}{subCongregation && " sub-congregation"}
+export function LanguageBadge({ language, subCongregation }: { language: Language; subCongregation?: boolean }) {
+  return <span className="chip language-badge" data-language-color={languageColor(language)}>
+    {language.name}{subCongregation && " sub-congregation"}
   </span>;
 }

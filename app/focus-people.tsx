@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { Pencil, Plus } from "lucide-react";
+import { Pencil } from "lucide-react";
 import type { Contact, Unit } from "../lib/directory";
 import { formatReportMonth, reportMonthPattern } from "../lib/family-history";
 import { focusMetrics, focusTypeLabels, type FocusActivity, type FocusActivityData } from "../lib/focus-people";
 import { Modal, type EditorState } from "./editor";
+import { UnitSectionHeading } from "./unit-section-heading";
 import { saveFocusActivity } from "./focus-activity-actions";
 
 const baptismDate = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
@@ -24,51 +25,48 @@ export function FocusPeople({ unit, contacts, currentMonth, history, edit }: {
   const activity = new Map(history?.activity.filter(({ report_month }) => report_month === `${month}-01`)
     .map((row) => [row.contact_id, row]));
 
-  return <section className="panel focus-people" aria-labelledby="focus-people-heading">
-    <div className="calling-section-heading">
-      <h2 id="focus-people-heading">Focus People</h2>
-      <button className="button primary" onClick={() => edit({ resource: "contacts", ward: unit })}>
-        <Plus size={17} aria-hidden />Add focus person
-      </button>
-    </div>
-    {history?.loadError && <p className="notice error" role="alert">{history.loadError}</p>}
-    {contacts.length === 0 ? <p className="muted">No focus people assigned to this {unit.kind} yet.</p> : <>
-      <label className="focus-month">Reporting month
-        <input type="month" min="1900-01" max="9999-12" value={month}
-          onChange={(event) => setSelectedMonth(event.target.value)} />
-      </label>
-      <ul className="focus-people-list">
-        {contacts.map((person) => {
-          const record = activity.get(person.id);
-          return <li key={person.id} className="focus-person">
-            <div className="focus-person-heading">
-              <div className="contact-info">
-                <h3>{person.name}</h3>
-                <div className="chips">
-                  {person.focus_type && <span className="chip">{focusTypeLabels[person.focus_type]}</span>}
-                  {person.is_whatsapp && <span className="chip">WhatsApp</span>}
+  return <section className="unit-tab-section" aria-labelledby="focus-people-heading">
+    <UnitSectionHeading id="focus-people-heading" title="Focus People" unit={unit} />
+    <div className="panel focus-people">
+      {history?.loadError && <p className="notice error" role="alert">{history.loadError}</p>}
+      {contacts.length === 0 ? <p className="muted">No focus people assigned to this {unit.kind} yet.</p> : <>
+        <label className="focus-month">Reporting month
+          <input type="month" min="1900-01" max="9999-12" value={month}
+            onChange={(event) => setSelectedMonth(event.target.value)} />
+        </label>
+        <ul className="focus-people-list">
+          {contacts.map((person) => {
+            const record = activity.get(person.id);
+            return <li key={person.id} className="focus-person">
+              <div className="focus-person-heading">
+                <div className="contact-info">
+                  <h3>{person.name}</h3>
+                  <div className="chips">
+                    {person.focus_type && <span className="chip">{focusTypeLabels[person.focus_type]}</span>}
+                    {person.is_whatsapp && <span className="chip">WhatsApp</span>}
+                  </div>
+                  {person.baptized_on && <span>Date Baptized <time dateTime={person.baptized_on}>{baptismDate.format(new Date(person.baptized_on))}</time></span>}
+                  {person.phone && <a href={`tel:${person.phone}`}>{person.phone}</a>}
+                  {person.email && <a href={`mailto:${person.email}`}>{person.email}</a>}
                 </div>
-                {person.baptized_on && <span>Date Baptized <time dateTime={person.baptized_on}>{baptismDate.format(new Date(person.baptized_on))}</time></span>}
-                {person.phone && <a href={`tel:${person.phone}`}>{person.phone}</a>}
-                {person.email && <a href={`mailto:${person.email}`}>{person.email}</a>}
+                <button className="icon-button" onClick={() => edit({ resource: "contacts", row: person })}
+                  aria-label={`Edit ${person.name}`}><Pencil size={17} aria-hidden /></button>
               </div>
-              <button className="icon-button" onClick={() => edit({ resource: "contacts", row: person })}
-                aria-label={`Edit ${person.name}`}><Pencil size={17} aria-hidden /></button>
-            </div>
-            {validMonth && !history?.loadError && <>
-              <dl className="focus-metrics">
-                {focusMetrics.map(({ key, label }) => <div key={key}>
-                  <dt>{label}</dt>
-                  <dd>{record?.[key] == null ? "Unknown" : record[key] ? "Yes" : "No"}</dd>
-                </div>)}
-              </dl>
-              <button className="button" aria-label={`Edit activity for ${person.name}`} onClick={() => setEditing({ person, month, record })}>Edit activity</button>
-            </>}
-          </li>;
-        })}
-      </ul>
-    </>}
-    {editing && <ActivityEditor {...editing} close={() => setEditing(null)} />}
+              {validMonth && !history?.loadError && <>
+                <dl className="focus-metrics">
+                  {focusMetrics.map(({ key, label }) => <div key={key}>
+                    <dt>{label}</dt>
+                    <dd>{record?.[key] == null ? "Unknown" : record[key] ? "Yes" : "No"}</dd>
+                  </div>)}
+                </dl>
+                <button className="button" aria-label={`Edit activity for ${person.name}`} onClick={() => setEditing({ person, month, record })}>Edit activity</button>
+              </>}
+            </li>;
+          })}
+        </ul>
+      </>}
+      {editing && <ActivityEditor {...editing} close={() => setEditing(null)} />}
+    </div>
   </section>;
 }
 

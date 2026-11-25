@@ -1,83 +1,127 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Building2, ChevronDown, ChevronRight, Pencil, Plus } from "lucide-react";
-import { buildingPhotoUrl, formatBuildingAddress, hasSacramentMeeting, unitLabels, unitPath, type Building, type Language, type Unit } from "../lib/directory";
-import type { EditorState } from "./editor";
-import { LanguageBadge } from "./language-badge";
+import { Building2, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Search, X } from "lucide-react";
+import { hasSacramentMeeting, unitNameWithType, type Building, type Directory, type Language, type Unit } from "../lib/directory";
+import { unitLeaderSubtitles } from "../lib/standard-callings";
 import { UnitLanguageBadges } from "./unit-facts";
+import { CongregationCard } from "./congregation-card";
 
 const nonEnglishOnlyStorageKey = "regional-directory:units:non-english-only";
+const browserStateKey = "regionalDirectoryUnits";
+
+type BrowseState = {
+  regionId: string;
+  expandedUnits: [string, boolean][];
+  search: string;
+  unitId: string;
+};
 
 type UnitTreeProps = {
   childrenByParent: Map<string, Unit[]>;
-  languageNames: Map<string, string>;
-  buildingAddresses: Map<string, string>;
-  browsePath: Set<string>;
-  nonEnglishOnly: boolean;
+  buildingsById: Map<string, Building>;
+  languagesById: Map<string, Language>;
+  leaderSubtitles: Map<string, string>;
+  congregationCounts: Map<string, number>;
+  isExpanded: (unitId: string) => boolean;
+  toggleExpanded: (unitId: string) => void;
+  rememberNavigation: (unitId: string) => void;
 };
 
-function unitCardName(unit: Unit) {
-  const name = unit.name.trim();
-  const type = unitLabels[unit.kind];
-  const nameLower = name.toLowerCase();
-  const typeLower = type.toLowerCase();
-  return nameLower === typeLower || nameLower.endsWith(` ${typeLower}`) ? name : `${name} ${type}`;
+function browseLinkId(unitId: string) {
+  return `unit-browse-${unitId}`;
 }
 
-function UnitNode({ unit, childrenByParent, languageNames, buildingAddresses, browsePath, nonEnglishOnly }: UnitTreeProps & { unit: Unit }) {
-  const [expanded, setExpanded] = useState(nonEnglishOnly || browsePath.has(unit.id));
-  const children = childrenByParent.get(unit.id) ?? [];
+function UnitNode({ unit, ...tree }: UnitTreeProps & { unit: Unit }) {
+  const name = unitNameWithType(unit);
+  const leaderSubtitle = tree.leaderSubtitles.get(unit.id);
+  const openDetails = () => tree.rememberNavigation(unit.id);
+  if (hasSacramentMeeting(unit.kind)) {
+    return <li>
+      <CongregationCard unit={unit} building={tree.buildingsById.get(unit.building_id ?? "")}
+        languagesById={tree.languagesById} leaderSubtitle={leaderSubtitle} id={browseLinkId(unit.id)} onNavigate={openDetails} />
+    </li>;
+  }
+
+  const children = tree.childrenByParent.get(unit.id) ?? [];
+  const expanded = children.length > 0 && tree.isExpanded(unit.id);
   const childListId = `unit-children-${unit.id}`;
-  const leaf = hasSacramentMeeting(unit.kind);
-  const canExpand = unit.kind === "council" || unit.kind === "stake" || children.length > 0;
-  const address = unit.building_id ? buildingAddresses.get(unit.building_id) : undefined;
-  const childType = unit.kind === "council" ? "stake" : "unit";
-  const title = (
-    <span className="unit-node-title">
-      <span className="unit-name-and-languages">
-        <strong>{unitCardName(unit)}</strong>
-        <UnitLanguageBadges unit={unit} languageNames={languageNames} />
-      </span>
-      {!leaf && <small>{children.length} {childType}{children.length === 1 ? "" : "s"}</small>}
-      {address && <small className="unit-notes">{address}</small>}
-    </span>
-  );
+  const isStake = unit.kind === "stake";
+  const viewLabel = isStake ? "View stake" : "View council";
+  const subunitCount = tree.congregationCounts.get(unit.id) ?? 0;
+
   return (
     <li className={`unit-node unit-node-${unit.kind}`}>
       <div className="unit-node-row">
-        {canExpand && <button type="button" className="icon-button unit-toggle"
-          aria-label={`Subunits of ${unitCardName(unit)}`} aria-expanded={expanded}
-          aria-controls={childListId} onClick={() => setExpanded((open) => !open)}>
-          <ChevronRight size={20} aria-hidden />
-        </button>}
-        <Link href={`/units/${unit.id}`} className="unit-card" prefetch={false}>{title}</Link>
+        <button type="button" className="unit-card unit-toggle" aria-expanded={expanded} disabled={!children.length}
+          aria-controls={childListId} onClick={() => tree.toggleExpanded(unit.id)}>
+          <ChevronDown size={19} aria-hidden />
+          {isStake && <span className="chip unit-count-badge">{subunitCount}
+            <span className="visually-hidden"> {subunitCount === 1 ? "subunit" : "subunits"}</span>
+          </span>}
+          <span className="unit-node-title">
+            <span className="unit-name-and-languages">
+              <strong>{name}</strong>
+              <UnitLanguageBadges unit={unit} languagesById={tree.languagesById} />
+            </span>
+            {isStake ? leaderSubtitle && <small>{leaderSubtitle}</small>
+              : <small>{expanded ? "Hide stakes" : children.length ? `Show ${children.length} ${children.length === 1 ? "stake" : "stakes"}` : "No stakes yet"}</small>}
+          </span>
+        </button>
+        <Link id={browseLinkId(unit.id)} href={`/units/${unit.id}`} className="unit-open-details" prefetch={false}
+          onNavigate={openDetails} aria-label={`${viewLabel}: ${name}`}>
+          {viewLabel}
+        </Link>
       </div>
-      {canExpand && <div id={childListId} hidden={!expanded}>
-        {children.length > 0 ? <ul className="unit-children">
-          {children.map((child) => <UnitNode key={child.id} unit={child} childrenByParent={childrenByParent}
-            languageNames={languageNames} buildingAddresses={buildingAddresses}
-            browsePath={browsePath} nonEnglishOnly={nonEnglishOnly} />)}
-        </ul> : <p className="muted unit-children-empty">No {childType}s yet.</p>}
-      </div>}
+      <div id={childListId} hidden={!expanded}>
+        {expanded && <ul className={`unit-children${isStake ? " child-unit-grid congregation-grid" : ""}`}>
+          {children.map((child) => <UnitNode key={child.id} unit={child} {...tree} />)}
+        </ul>}
+      </div>
     </li>
   );
 }
 
-export function UnitsView({ units, buildings, languages, edit, browseUnitId }: {
-  units: Unit[]; languages: Language[]; edit: (state: EditorState) => void;
-  buildings: Building[];
+export function UnitsView({ directory, browseUnitId }: {
+  directory: Directory;
   browseUnitId: string;
 }) {
+  const { units, buildings, languages } = directory;
   const [regionId, setRegionId] = useState("");
   const [nonEnglishOnly, setNonEnglishOnly] = useState(false);
+  const [expandedUnits, setExpandedUnits] = useState(() => new Map<string, boolean>());
+  const [search, setSearch] = useState("");
+  const [restoreUnitId, setRestoreUnitId] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
   const regions: Unit[] = [];
   const childrenByParent = new Map<string, Unit[]>();
-  const languageNames = new Map(languages.map((language) => [language.id, language.name]));
-  const buildingAddresses = new Map(buildings.map((building) => [building.id, formatBuildingAddress(building)]));
+  const congregationCounts = new Map<string, number>();
+  const leaderSubtitles = unitLeaderSubtitles(directory);
+  const languagesById = new Map(languages.map((language) => [language.id, language]));
+  const buildingsById = new Map(buildings.map((building) => [building.id, building]));
   const unitsById = new Map(units.map((unit) => [unit.id, unit]));
+  const sortedUnits = [...units].sort((a, b) => a.name.localeCompare(b.name));
+
+  useEffect(() => {
+    const saved: BrowseState | undefined = window.history.state?.[browserStateKey];
+    if (saved) {
+      setRegionId(saved.regionId);
+      setExpandedUnits(new Map(saved.expandedUnits));
+      setSearch(saved.search);
+    }
+    setRestoreUnitId(saved?.unitId ?? browseUnitId);
+  }, [browseUnitId]);
+
+  useEffect(() => {
+    if (!restoreUnitId) return;
+    const frame = requestAnimationFrame(() => {
+      const link = document.getElementById(browseLinkId(restoreUnitId));
+      link?.focus({ preventScroll: true });
+      link?.scrollIntoView({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [restoreUnitId]);
 
   useEffect(() => {
     try {
@@ -89,6 +133,7 @@ export function UnitsView({ units, buildings, languages, edit, browseUnitId }: {
 
   function updateNonEnglishOnly(checked: boolean) {
     setNonEnglishOnly(checked);
+    setExpandedUnits(new Map());
     try {
       window.localStorage.setItem(nonEnglishOnlyStorageKey, String(checked));
     } catch {
@@ -97,7 +142,7 @@ export function UnitsView({ units, buildings, languages, edit, browseUnitId }: {
   }
 
   function isNonEnglish(languageId: string | null) {
-    const name = languageId ? languageNames.get(languageId)?.trim().toLowerCase() : undefined;
+    const name = languageId ? languagesById.get(languageId)?.name.trim().toLowerCase() : undefined;
     return Boolean(name && name !== "english");
   }
 
@@ -116,7 +161,10 @@ export function UnitsView({ units, buildings, languages, edit, browseUnitId }: {
     }
   }
 
-  for (const unit of [...units].sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const unit of sortedUnits) {
+    if (unit.parent_id && hasSacramentMeeting(unit.kind)) {
+      congregationCounts.set(unit.parent_id, (congregationCounts.get(unit.parent_id) ?? 0) + 1);
+    }
     if (unit.kind === "region") {
       regions.push(unit);
     } else if (unit.parent_id && (!nonEnglishOnly || matchingPaths.has(unit.id))) {
@@ -137,85 +185,116 @@ export function UnitsView({ units, buildings, languages, edit, browseUnitId }: {
 
   const region = regions.find((entry) => entry.id === (regionId || browseRegionId)) ?? regions[0];
   const councils = region ? childrenByParent.get(region.id) ?? [] : [];
+  const expandedByDefault = (unitId: string) => nonEnglishOnly || browsePath.has(unitId);
+  const tree: UnitTreeProps = {
+    childrenByParent, buildingsById, languagesById, leaderSubtitles, congregationCounts,
+    isExpanded: (unitId) => expandedUnits.get(unitId) ?? expandedByDefault(unitId),
+    toggleExpanded: (unitId) => setExpandedUnits((current) =>
+      new Map(current).set(unitId, !(current.get(unitId) ?? expandedByDefault(unitId)))),
+    rememberNavigation: (unitId) => {
+      const state: BrowseState = { regionId, expandedUnits: [...expandedUnits], search, unitId };
+      window.history.replaceState({ ...window.history.state, [browserStateKey]: state }, "");
+    },
+  };
+
+  const expandableUnits = councils.flatMap((council) => [council, ...(childrenByParent.get(council.id) ?? [])])
+    .filter((unit) => childrenByParent.has(unit.id));
+  const allExpanded = expandableUnits.every(({ id }) => tree.isExpanded(id));
+
+  function toggleAll() {
+    setExpandedUnits((current) => {
+      const next = new Map(current);
+      for (const { id } of expandableUnits) next.set(id, !allExpanded);
+      return next;
+    });
+  }
+
+  const query = search.trim().toLocaleLowerCase();
+  const searchResults: Unit[] = [];
+  if (query) {
+    const remaining = [...councils];
+    const visited = new Set<string>();
+    while (remaining.length) {
+      const unit = remaining.pop()!;
+      if (visited.has(unit.id)) continue;
+      visited.add(unit.id);
+      if (unitNameWithType(unit).toLocaleLowerCase().includes(query)) searchResults.push(unit);
+      remaining.push(...(childrenByParent.get(unit.id) ?? []));
+    }
+    searchResults.sort((a, b) => a.name.localeCompare(b.name));
+  }
 
   return (
     <section aria-labelledby="units-heading">
       <div className="section-heading">
         <div><h1 id="units-heading">Units</h1><p>Browse coordinating councils, stakes, wards, and branches.</p></div>
       </div>
+      {region && <div className="unit-filters">
+        <div className="unit-search">
+          <Search size={18} aria-hidden />
+          <input ref={searchInput} type="search" aria-label="Find a unit" placeholder="Find a unit" value={search}
+            onChange={(event) => setSearch(event.target.value)} />
+          {search && <button type="button" className="icon-button" aria-label="Clear unit search" onClick={() => {
+            setSearch("");
+            searchInput.current?.focus();
+          }}>
+            <X size={17} aria-hidden />
+          </button>}
+        </div>
+        <label className="button">
+          <input type="checkbox" checked={nonEnglishOnly} onChange={(event) => updateNonEnglishOnly(event.target.checked)} />
+          Non-English
+        </label>
+        {!query && expandableUnits.length > 0 && <button type="button" className="button" aria-controls="unit-councils" onClick={toggleAll}>
+          {allExpanded ? <ChevronsUp size={17} aria-hidden /> : <ChevronsDown size={17} aria-hidden />}
+          {allExpanded ? "Collapse all" : "Expand all"}
+        </button>}
+      </div>}
       {region && <div className="unit-region">
-        <div className="unit-region-name">
-          {regions.length > 1 && <label>Browse region
-            <select value={region.id} onChange={(event) => setRegionId(event.target.value)}>
-              {regions.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
-            </select>
-          </label>}
-          <Link href={`/units/${region.id}`} className="unit-card" prefetch={false}>
-            <span className="unit-node-title unit-name-and-languages">
-              <strong>{unitCardName(region)}</strong>
-              <UnitLanguageBadges unit={region} languageNames={languageNames} />
-            </span>
+        {regions.length > 1 && <label>Browse region
+          <select value={region.id} onChange={(event) => setRegionId(event.target.value)}>
+            {regions.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+          </select>
+        </label>}
+        <div className="unit-node-row">
+          <span className="unit-region-title unit-node-title unit-name-and-languages">
+            <strong>{unitNameWithType(region)}</strong>
+            <UnitLanguageBadges unit={region} languagesById={languagesById} />
+          </span>
+          <Link id={browseLinkId(region.id)} href={`/units/${region.id}`} className="unit-open-details" prefetch={false}
+            onNavigate={() => tree.rememberNavigation(region.id)} aria-label={`View region: ${unitNameWithType(region)}`}>
+            View region
           </Link>
         </div>
       </div>}
-      {region && <div className="unit-filters">
-        <label className="button">
-          <input type="checkbox" checked={nonEnglishOnly} onChange={(event) => updateNonEnglishOnly(event.target.checked)} />
-          Non-English units only
-        </label>
-      </div>}
-      {region && councils.length > 0 ? <ul className="unit-councils" aria-label="Coordinating councils" key={`${region.id}-${nonEnglishOnly}`}>
-        {councils.map((unit) => <UnitNode key={unit.id} unit={unit} childrenByParent={childrenByParent}
-          languageNames={languageNames} buildingAddresses={buildingAddresses}
-          browsePath={browsePath} nonEnglishOnly={nonEnglishOnly} />)}
+      {region && query ? <div className="unit-search-results">
+        <p className="muted" role="status">{searchResults.length === 0 ? "No matching units" : `${searchResults.length} ${searchResults.length === 1 ? "matching unit" : "matching units"}`}</p>
+        {searchResults.length > 0 && <ul aria-label="Unit search results">
+          {searchResults.map((unit) => {
+            const parent = unitsById.get(unit.parent_id ?? "");
+            const leaderSubtitle = leaderSubtitles.get(unit.id);
+            return <li key={unit.id}>
+              <Link id={browseLinkId(unit.id)} href={`/units/${unit.id}`} className="unit-card unit-search-result" prefetch={false}
+                onNavigate={() => tree.rememberNavigation(unit.id)}>
+                <span className="unit-node-title">
+                  <span className="unit-name-and-languages">
+                    <strong>{unitNameWithType(unit)}</strong>
+                    <UnitLanguageBadges unit={unit} languagesById={languagesById} />
+                  </span>
+                  {leaderSubtitle && <small>{leaderSubtitle}</small>}
+                  {parent && <small>{unitNameWithType(parent)}</small>}
+                </span>
+                <ChevronRight size={18} aria-hidden />
+              </Link>
+            </li>;
+          })}
+        </ul>}
+      </div> : region && councils.length > 0 ? <ul id="unit-councils" className="unit-councils" aria-label="Coordinating councils">
+        {councils.map((unit) => <UnitNode key={unit.id} unit={unit} {...tree} />)}
       </ul> : <div className="panel empty">
         <span><Building2 size={25} aria-hidden /></span>
         <h2>{region ? (nonEnglishOnly ? "No non-English units in this region" : "No coordinating councils yet") : "No region yet"}</h2>
       </div>}
-      <details className="panel calling-group language-settings">
-        <summary><strong>Buildings</strong><ChevronDown size={18} aria-hidden /></summary>
-        <div className="calling-body">
-          <div className="toolbar">
-            <button className="button" onClick={() => edit({ resource: "buildings" })}>
-              <Plus size={16} aria-hidden />Add building
-            </button>
-          </div>
-          {buildings.length > 0 && <ul className="panel management-list">
-            {[...buildings].sort((a, b) => a.address.localeCompare(b.address)).map((building) => (
-              <li key={building.id}>
-                {building.photo_path && <Image className="building-photo-thumbnail" src={buildingPhotoUrl(building)}
-                  width={64} height={52} alt="" unoptimized />}
-                <div><strong>{buildingAddresses.get(building.id)}</strong>
-                  {building.agent_stake_id && <small>Agent Stake · {unitsById.get(building.agent_stake_id)?.name}</small>}
-                  {units.filter((unit) => unit.building_id === building.id).map((unit) =>
-                    <small key={unit.id}>{unitPath(unit, unitsById)}</small>)}
-                </div>
-                <button className="icon-button" aria-label={`Edit building at ${buildingAddresses.get(building.id)}`}
-                  onClick={() => edit({ resource: "buildings", row: building })}><Pencil size={17} /></button>
-              </li>
-            ))}
-          </ul>}
-        </div>
-      </details>
-      <details className="panel calling-group language-settings">
-        <summary><strong>Languages</strong><ChevronDown size={18} aria-hidden /></summary>
-        <div className="calling-body">
-          <div className="toolbar">
-            <button className="button" onClick={() => edit({ resource: "languages" })}>
-              <Plus size={16} aria-hidden />Add language
-            </button>
-          </div>
-          {languages.length > 0 && <ul className="panel management-list">
-            {[...languages].sort((a, b) => a.name.localeCompare(b.name)).map((language) => (
-              <li key={language.id}>
-                <div><span className="chips"><LanguageBadge name={language.name} /></span></div>
-                <button className="icon-button" aria-label={`Edit language ${language.name}`}
-                  onClick={() => edit({ resource: "languages", row: language })}><Pencil size={17} /></button>
-              </li>
-            ))}
-          </ul>}
-        </div>
-      </details>
     </section>
   );
 }

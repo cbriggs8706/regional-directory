@@ -1,4 +1,5 @@
 import type { FocusType } from "./focus-people";
+import type { LanguageColor } from "./language-colors";
 
 export const unitLabels = {
   region: "Region",
@@ -62,7 +63,7 @@ export function buildingPhotoUrl(building: Building) {
 
 export const buildingPhotoTypes = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as const;
 export const buildingPhotoMaxBytes = 4 * 1024 * 1024;
-export type Language = { id: string; name: string };
+export type Language = { id: string; name: string; color: LanguageColor };
 export type Contact = {
   id: string; name: string; email: string | null; phone: string | null;
   focus_type: FocusType | null;
@@ -115,6 +116,14 @@ export type Directory = {
   assignments: Assignment[];
   directory_access: Access[];
 };
+
+export function unitNameWithType(unit: Pick<Unit, "name" | "kind">) {
+  const name = unit.name.trim();
+  const type = unitLabels[unit.kind];
+  const nameLower = name.toLowerCase();
+  const typeLower = type.toLowerCase();
+  return nameLower === typeLower || nameLower.endsWith(` ${typeLower}`) ? name : `${name} ${type}`;
+}
 
 export function callingLevelLabel(level: CallingLevel) {
   return level === "ward" ? "Ward / Branch" : unitLabels[level];

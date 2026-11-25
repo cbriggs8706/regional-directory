@@ -20,8 +20,8 @@ function chartStep(maximum: number) {
   return (step <= 1 ? 1 : step <= 2 ? 2 : step <= 5 ? 5 : 10) * magnitude;
 }
 
-export function SubmittersChart({ series, comparison, enterHistory, compareUnits = false }: {
-  series: ReportSeries[]; comparison: string; enterHistory?: () => void; compareUnits?: boolean;
+export function SubmittersChart({ series, comparison, compareUnits = false }: {
+  series: ReportSeries[]; comparison: string; compareUnits?: boolean;
 }) {
   const hover = useChartHover();
   const maximum = Math.max(4, ...series.flatMap(({ metrics }) => metrics.map(({ value }) => value ?? 0)));
@@ -36,9 +36,6 @@ export function SubmittersChart({ series, comparison, enterHistory, compareUnits
     <section className="report-chart report-submitters">
       <h2>Members Submitting This Year</h2>
       <p className="report-chart-caption">{comparison}</p>
-      {enterHistory && <div className="report-chart-actions">
-        <button className="button" type="button" onClick={enterHistory}>Enter submitter history</button>
-      </div>}
       <div className="report-chart-scroll" onScroll={hover.hide} onWheel={hover.hide}>
         <svg viewBox="0 0 960 248" aria-hidden="true" className="report-line-chart">
           {ticks.map((tick) => <g key={tick}>

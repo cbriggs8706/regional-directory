@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { UnitSectionHeading } from "./unit-section-heading";
 import type { Unit } from "../lib/directory";
 import { formatReportMonth, monthNames, reportComparisonColor, reportMonthPattern, reportNumber, reportPeriod } from "../lib/family-history";
 import { getInvolvedMetrics, type GetInvolvedData, type GetInvolvedMetric, type GetInvolvedReport } from "../lib/get-involved";
@@ -126,19 +127,19 @@ function GetInvolvedChart({ metric, months, series, comparing }: {
   </section>;
 }
 
-export function GetInvolvedReports({ wards, data, currentMonth, scopeName = "Unit total", comparison, viewControls }: {
-  wards: Unit[]; data: GetInvolvedData; currentMonth: string; scopeName?: string;
+export function GetInvolvedReports({ unit, wards, data, currentMonth, comparison, viewControls, entryDialog }: {
+  unit: Unit; wards: Unit[]; data: GetInvolvedData; currentMonth: string;
   comparison?: ReportScope[];
   viewControls?: ReactNode;
+  entryDialog: { open: boolean; close: () => void };
 }) {
   const currentYear = currentMonth.slice(0, 4);
   const [selectedYear, setSelectedYear] = useState(currentYear);
-  const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState("");
   const comparisonScopes = comparison?.length ? comparison : undefined;
   const comparing = Boolean(comparisonScopes);
   const chartYear = comparing ? currentYear : selectedYear;
-  const scopes = (comparisonScopes ?? [{ name: scopeName, wards }]).map((scope) => {
+  const scopes = (comparisonScopes ?? [{ name: unit.name, wards }]).map((scope) => {
     const ids = new Set(scope.wards.map(({ id }) => id));
     const byMonth = new Map<string, GetInvolvedReport[]>();
     for (const report of data.reports) {
@@ -175,22 +176,21 @@ export function GetInvolvedReports({ wards, data, currentMonth, scopeName = "Uni
   })) }));
   const partial = charts.some(({ series }) => series.some(({ points, wardCount }) => points.some(({ value, units }) => value !== null && units < wardCount)));
   return <section className="family-report" aria-labelledby="get-involved-heading">
-    <div className="section-heading report-heading">
-      <div><h2 id="get-involved-heading" className="unit-section-heading">Get Involved</h2>
-        {shownMonths.length > 0 && <p>{first === last ? formatReportMonth(end) : `${formatReportMonth(months[0])} – ${formatReportMonth(end)}`}</p>}
-      </div>
-      {wards.length > 0 && <button type="button" className="button" disabled={Boolean(data.loadError)} onClick={() => { setStatus(""); setEditing(true); }}>Enter Get Involved counts</button>}
-    </div>
+    <UnitSectionHeading id="get-involved-heading" title="Get Involved" unit={unit} />
     {status && <p className="notice" role="status">{status}</p>}
     {data.loadError ? <p className="notice error" role="alert">{data.loadError}</p> : <>
-      {(showPeriod || viewControls) && <div className="report-filters get-involved-filters">
-        {showPeriod && <label>Chart period
-          <select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}>
-            {years.map((year) => <option key={year} value={year}>{year}</option>)}
-            <option value="">Latest 24 months</option>
-          </select>
-        </label>}
-        {viewControls}
+      {(shownMonths.length > 0 || showPeriod || viewControls) && <div className="report-filter-bar">
+        {shownMonths.length > 0 && <p className="report-coverage">{first === last ? formatReportMonth(end)
+          : `${formatReportMonth(months[0])} – ${formatReportMonth(end)}`}</p>}
+        {(showPeriod || viewControls) && <div className="report-filters">
+          {showPeriod && <label>Chart period
+            <select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}>
+              {years.map((year) => <option key={year} value={year}>{year}</option>)}
+              <option value="">Latest 24 months</option>
+            </select>
+          </label>}
+          {viewControls}
+        </div>}
       </div>}
       {partial && <p className="field-help">{comparing ? "View monthly values to see how many wards or branches contributed to partial totals."
         : "* Only some wards or branches reported a count for that month."}</p>}
@@ -200,9 +200,9 @@ export function GetInvolvedReports({ wards, data, currentMonth, scopeName = "Uni
         {charts.map(({ metric, series }) => <GetInvolvedChart key={metric.key} metric={metric} months={months} series={series} comparing={comparing} />)}
       </div>}
     </>}
-    {editing && <GetInvolvedEntry wards={wards} reports={data.reports} initialMonth={end} close={() => setEditing(false)}
+    {entryDialog.open && !data.loadError && wards.length > 0 && <GetInvolvedEntry wards={wards} reports={data.reports} initialMonth={end} close={entryDialog.close}
       saved={(month) => {
-        setEditing(false);
+        entryDialog.close();
         if (!comparing && (selectedYear || serial(month) < first)) setSelectedYear(month.slice(0, 4));
         setStatus(`Saved Get Involved counts for ${formatReportMonth(month)}.`);
       }} />}

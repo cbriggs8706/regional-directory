@@ -1,6 +1,7 @@
 "use server";
 
 import { z } from "zod";
+import { revalidatePath } from "next/cache";
 import { getViewer } from "../lib/supabase";
 import { offsetDate, type VisitEvent } from "../lib/visits";
 
@@ -35,6 +36,7 @@ export async function scheduleVisit(unitId: string, day: string) {
     return { error: "Choose a unit and a valid date.", added: 0 };
   }
   const { data, error } = await viewer.client.rpc("schedule_unit_visit", { visit_unit: unitId, visit_date: day });
+  if (!error && Number(data) > 0) revalidatePath(`/units/${unitId.toLowerCase()}`);
   return { error: error ? "Could not schedule the unit’s meetings." : null, added: error ? 0 : Number(data) };
 }
 
@@ -56,10 +58,12 @@ export async function saveVisit(values: unknown) {
   if (!parsed.success) return { error: "Choose a date and an end time after the start time." };
   const { id, unit_id, kind, ...schedule } = parsed.data;
   const table = viewer.client.from("visit_events");
-  const { error } = id
-    ? await table.update(schedule).eq("id", id).eq("owner_id", viewer.user.id).select("id").single()
-    : await table.insert({ ...schedule, unit_id, kind });
+  const query = id
+    ? table.update(schedule).eq("id", id).eq("owner_id", viewer.user.id)
+    : table.insert({ ...schedule, unit_id, kind });
+  const { data, error } = await query.select("unit_id").single();
   if (error?.code === "23505") return { error: "This type of visit is already on your calendar for that unit and date." };
+  if (data?.unit_id) revalidatePath(`/units/${data.unit_id}`);
   return { error: error ? "Could not save this visit." : null };
 }
 
@@ -67,7 +71,8 @@ export async function deleteVisit(id: string) {
   const viewer = await getViewer();
   if (!viewer?.role) return { error: accessError };
   if (!uuid.safeParse(id).success) return { error: "Could not find this visit." };
-  const { error } = await viewer.client.from("visit_events").delete().eq("id", id)
-    .eq("owner_id", viewer.user.id).select("id").single();
+  const { data, error } = await viewer.client.from("visit_events").delete().eq("id", id)
+    .eq("owner_id", viewer.user.id).select("unit_id").single();
+  if (data?.unit_id) revalidatePath(`/units/${data.unit_id}`);
   return { error: error ? "Could not remove this visit." : null };
 }

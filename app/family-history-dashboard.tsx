@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Plus } from "lucide-react";
+import { ChartNoAxesColumn, History } from "lucide-react";
 import { type Unit } from "../lib/directory";
 import {
   countMetrics, formatReportMonth, generationsLabel, monthNames, reportComparisonColor, reportMonthPattern, reportNumber, reportPeriod,
@@ -10,6 +10,8 @@ import {
 import { MetricChart, SubmittersChart } from "./report-charts";
 import { ReportEntry } from "./report-entry";
 import { SubmitterHistoryEntry } from "./submitter-history-entry";
+import { AddMenu } from "./add-menu";
+import { familyHistoryReportTitle, UnitSectionHeading } from "./unit-section-heading";
 
 const previousYearColor = "#bbb7b2";
 const olderYearColor = "#dcdcdc";
@@ -26,7 +28,7 @@ function UnitOptions({ stakes, wards, unitNames }: { stakes: Unit[]; wards: Unit
   </>;
 }
 
-export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError, fixedUnit, comparisonUnits, viewControls }: {
+export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError, fixedUnit, comparisonUnits, viewControls, entryDialog, historyDialog, addHost }: {
   units: Unit[];
   reports: FamilyHistoryReport[];
   currentMonth: string;
@@ -34,13 +36,16 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   fixedUnit?: Unit;
   comparisonUnits?: Unit[];
   viewControls?: ReactNode;
+  entryDialog?: { open: boolean; close: () => void };
+  historyDialog?: { open: boolean; close: () => void };
+  addHost?: HTMLElement | null;
 }) {
   const [scopeId, setScope] = useState("");
   const [compareId, setCompare] = useState("");
   const [chosenMonth, setChosenMonth] = useState("");
   const [comparisonMonth, setComparisonMonth] = useState("");
   const [showPercentages, setShowPercentages] = useState(false);
-  const [entry, setEntry] = useState<{ unit: string; month: string } | null>(null);
+  const [entryOpen, setEntryOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [status, setStatus] = useState("");
   const sorted = [...units].sort((a, b) => a.name.localeCompare(b.name));
@@ -55,6 +60,9 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   const comparison = directory.get(compareId);
   const compareAll = Boolean(comparisonUnits?.length);
   const inScope = scopeWards(sorted, scope);
+  const canEnterReport = !loadError && inScope.length > 0;
+  const closeEntry = entryDialog?.close ?? (() => setEntryOpen(false));
+  const closeHistory = historyDialog?.close ?? (() => setHistoryOpen(false));
   const compareWards = comparison ? scopeWards(sorted, comparison) : [];
   const isWard = scope?.level === "ward";
   const alternatives = fixedUnit ? [] : (scope?.kind === "stake" ? stakes : isWard ? wards : []).filter(({ id }) => id !== scopeId);
@@ -65,8 +73,8 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
     .map(({ report_month }) => report_month.slice(0, 7)))].sort().reverse();
   const currentYear = currentMonth.slice(0, 4);
   const availableMonths = compareAll ? savedMonths.filter((period) => period.startsWith(`${currentYear}-`) && period <= currentMonth) : savedMonths;
-  const savedSelection = comparisonMonth.startsWith(`${currentYear}-`) && comparisonMonth <= currentMonth ? comparisonMonth : "";
-  const month = (compareAll ? savedSelection : chosenMonth) || availableMonths[0] || currentMonth;
+  const requestedMonth = compareAll ? comparisonMonth : chosenMonth;
+  const month = availableMonths.includes(requestedMonth) ? requestedMonth : availableMonths[0] ?? currentMonth;
   const year = Number(month.slice(0, 4));
   const monthIndex = Number(month.slice(5, 7)) - 1;
   const trendMonthIndex = compareAll ? Number(currentMonth.slice(5, 7)) - 1 : monthIndex;
@@ -84,6 +92,7 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
 
   const label = (target: Unit | undefined) => target ? unitNames.get(target.id) ?? target.name : "Regional overview";
   const reportsForMonth = readMonth(scope, month);
+  const percentFiled = reportsForMonth.total ? reportsForMonth.filed / reportsForMonth.total * 100 : 0;
   const unitSeries = comparisonUnits?.map((target, index) => ({
     id: target.id, label: label(target), unitName: target.name, color: reportComparisonColor(index), target,
   }));
@@ -152,36 +161,34 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   }
 
   return (
-    <section className="family-report" aria-labelledby="report-heading">
-      <div className="section-heading report-heading">
-        <div>
-          {fixedUnit
-            ? <h2 id="report-heading" className="unit-section-heading">Family History Activity Report</h2>
-            : <h1 id="report-heading">Family History Activity Report</h1>}
-          <p>{label(scope)} · {formatReportMonth(month)}</p>
-        </div>
-        <button className="button primary" disabled={Boolean(loadError) || !inScope.length}
-          onClick={() => { setStatus(""); setEntry({ unit: isWard ? scope.id : "", month }); }}>
-          <Plus size={17} aria-hidden />
-          {isWard && reportIndex.has(`${scope.id}/${month}`) ? "Edit report" : "Enter report"}
-        </button>
-      </div>
+    <section className={`family-report${addHost && canEnterReport ? " family-report-with-add-menu" : ""}`} aria-labelledby="report-heading">
+      {fixedUnit ? <UnitSectionHeading id="report-heading" title={familyHistoryReportTitle} unit={fixedUnit} />
+        : <div className="section-heading report-heading">
+          <div>
+            <h1 id="report-heading">{familyHistoryReportTitle}</h1>
+            <p>{label(scope)} · {formatReportMonth(month)}</p>
+          </div>
+        </div>}
       <div className="report-filter-bar">
-        <div className="report-coverage">
-          {reportsForMonth.filed} of {reportsForMonth.total} unit reports for {formatReportMonth(month)}
-          {comparison && <small>{label(comparison)} · {readMonth(comparison, month).filed} of {compareWards.length} reports</small>}
-        </div>
+        {!loadError && <div className="report-coverage">
+          <svg className="report-coverage-ring" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+            <circle className="report-coverage-track" cx="16" cy="16" r="13" />
+            {percentFiled > 0 && <circle className="report-coverage-fill" cx="16" cy="16" r="13"
+              pathLength="100" strokeDasharray={`${percentFiled} 100`} transform="rotate(-90 16 16)" />}
+          </svg>
+          <div>
+            {reportsForMonth.filed} of {reportsForMonth.total} unit reports for {formatReportMonth(month)}
+            {comparison && <small>{label(comparison)} · {readMonth(comparison, month).filed} of {compareWards.length} reports</small>}
+          </div>
+        </div>}
         <div className="report-filters">
-          <label>Reporting month
-            <input type="month" aria-label="Reporting month" min={compareAll ? `${currentYear}-01` : "1900-01"}
-              max={compareAll ? currentMonth : "9999-12"} value={month} onChange={(event) => chooseMonth(event.target.value)} />
-          </label>
-          {availableMonths.length > 1 && <label>Saved reports
-            <select value={availableMonths.includes(month) ? month : ""} onChange={(event) => chooseMonth(event.target.value)}>
-              <option value="" disabled>Select a report</option>
+          <label>Saved reports
+            <select value={availableMonths.length ? month : ""} disabled={Boolean(loadError) || !availableMonths.length}
+              onChange={(event) => chooseMonth(event.target.value)}>
+              {!availableMonths.length && <option value="">{loadError ? "Saved reports unavailable" : "No saved reports"}</option>}
               {availableMonths.map((period) => <option key={period} value={period}>{formatReportMonth(period)}</option>)}
             </select>
-          </label>}
+          </label>
           {viewControls}
           {!fixedUnit && <label>Stake or ward/branch
             <select value={scopeId} onChange={(event) => { setScope(event.target.value); setCompare(""); }}>
@@ -202,10 +209,7 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
       {loadError ? <p className="notice error" role="alert">{loadError}</p> : <>
         {reportsForMonth.filed === 0 && <p className="notice">No unit reports for this view in {formatReportMonth(month)}.</p>}
         <div className={`panel report-sheet${comparison || compareAll ? " report-sheet-comparison" : ""}`}>
-          <SubmittersChart series={trend} comparison={trendCaption} compareUnits={compareAll} enterHistory={inScope.length ? () => {
-            setStatus("");
-            setHistoryOpen(true);
-          } : undefined} />
+          <SubmittersChart series={trend} comparison={trendCaption} compareUnits={compareAll} />
           <div className="report-metrics">
             <MetricChart title={generationsLabel} series={series("#27c4f5", "first_four_generations")} percentage compareUnits={compareAll} />
             <MetricChart title={countMetrics[1].label} series={series("#fcb34c", "familysearch_logins")} compareUnits={compareAll} />
@@ -234,16 +238,25 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
           </section>
         </div>
       </>}
-      {entry && <ReportEntry fixedUnit={Boolean(fixedUnit && isWard)} wards={inScope} unitNames={unitNames} initialUnit={entry.unit} initialMonth={entry.month} reports={reportIndex}
-        close={() => setEntry(null)} saved={(unit, period) => {
-          setEntry(null);
+      {canEnterReport && (entryDialog?.open ?? entryOpen) && <ReportEntry fixedUnit={Boolean(fixedUnit && isWard)}
+        wards={inScope} unitNames={unitNames} initialUnit={isWard ? scope.id : ""} initialMonth={month} reports={reportIndex}
+        close={closeEntry} saved={(unit, period) => {
+          closeEntry();
           chooseMonth(period);
           setStatus(`Saved ${formatReportMonth(period)} for ${directory.get(unit)?.name ?? "this unit"}.`);
         }} />}
-      {historyOpen && <SubmitterHistoryEntry fixedUnit={Boolean(isWard)} wards={inScope} unitNames={unitNames}
+      {addHost && canEnterReport && <AddMenu host={addHost} label="Add to family history reports" actions={[
+        {
+          label: isWard && reportIndex.has(`${scope.id}/${month}`) ? "Edit report" : "Enter report",
+          Icon: ChartNoAxesColumn,
+          run: () => { setStatus(""); setEntryOpen(true); },
+        },
+        { label: "Enter submitter history", Icon: History, run: () => { setStatus(""); setHistoryOpen(true); } },
+      ]} />}
+      {canEnterReport && (historyDialog?.open ?? historyOpen) && <SubmitterHistoryEntry fixedUnit={Boolean(isWard)} wards={inScope} unitNames={unitNames}
         initialUnit={isWard ? scope.id : inScope.length === 1 ? inScope[0].id : ""} initialMonth={month} reports={reportIndex}
-        close={() => setHistoryOpen(false)} saved={(unit, period, changedMonths) => {
-          setHistoryOpen(false);
+        close={closeHistory} saved={(unit, period, changedMonths) => {
+          closeHistory();
           chooseMonth(period);
           setStatus(`Saved ${changedMonths} ${changedMonths === 1 ? "month" : "months"} of submitter history for ${directory.get(unit)?.name ?? "this unit"}.`);
         }} />}

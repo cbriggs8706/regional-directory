@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import {
-  BookOpen, Building2, CalendarDays, ChevronDown, Copy, Ellipsis, Filter, House, LogOut, Mail, Pencil, Plus, Search, ShieldCheck, Tags, Users, X,
+  BookOpen, Building2, CalendarDays, ChevronDown, Copy, Ellipsis, Filter, House, Languages, LogOut, Mail, Pencil, Plus, Search, ShieldCheck, Tags, Users, X,
 } from "lucide-react";
 import { sendEmail, signOut, type SendResult } from "./actions";
 import { Editor, Modal, type EditorState } from "./editor";
 import { UnitsView } from "./units-view";
+import { BuildingsView, LanguagesView, type DirectoryManagementSection } from "./directory-management";
 import { UnitPageContent } from "./unit-page-content";
 import { CallingGroups } from "./calling-groups";
 import { AssignmentBuildings } from "./assignment-buildings";
@@ -18,6 +19,7 @@ import type { FamilyHistoryReport } from "../lib/family-history";
 import { focusTypeLabels, type FocusActivityData } from "../lib/focus-people";
 import type { GetInvolvedData } from "../lib/get-involved";
 import type { UnitJournalData } from "../lib/unit-journal";
+import type { UnitVisitData } from "../lib/visits";
 import {
   callingLevelLabel, callingPath, normalizeEmail, unitLabels, unitPath,
   type Assignment, type Contact, type Directory,
@@ -34,6 +36,10 @@ const sections = [
   { id: "callings", label: "Callings", Icon: Tags },
   { id: "access", label: "Admin", description: "Manage access", Icon: ShieldCheck },
 ] as const;
+const managementLinks = [
+  { id: "buildings", label: "Buildings", Icon: Building2 },
+  { id: "languages", label: "Languages", Icon: Languages },
+] as const;
 type Tab = typeof sections[number]["id"];
 type Pending = { id: string; subject: string; sent: number; total: number };
 
@@ -45,20 +51,23 @@ function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => Array.from(word)[0]).join("").toUpperCase();
 }
 
-export function DirectoryApp({ unitId, directory, admin, email, userId, mailReady, pending, familyHistory, journal, focusActivity, getInvolved }: {
-  unitId?: string; directory: Directory; admin: boolean; email: string; userId: string; mailReady: boolean; pending: Pending[];
+export function DirectoryApp({ unitId, managementSection, directory, admin, email, userId, mailReady, pending, familyHistory, journal, focusActivity, getInvolved, unitVisits }: {
+  unitId?: string; managementSection?: DirectoryManagementSection;
+  directory: Directory; admin: boolean; email: string; userId: string; mailReady: boolean; pending: Pending[];
   familyHistory: { reports: FamilyHistoryReport[]; loadError: string | null; currentMonth: string };
   journal: UnitJournalData | null;
   focusActivity: FocusActivityData | null;
   getInvolved: GetInvolvedData | null;
+  unitVisits: UnitVisitData | null;
 }) {
   const router = useRouter();
   const params = useSearchParams();
   const requestedTab = params.get("tab");
-  const tab = unitId ? "units" : sections.find(({ id }) =>
-    id === requestedTab && (id !== "access" || admin))?.id ?? "dashboard";
+  const tab = managementSection ?? (unitId ? "units" : sections.find(({ id }) =>
+    id === requestedTab && (id !== "access" || admin))?.id ?? "dashboard");
   const browseUnitId = params.get("unit") ?? "";
   const [moreOpen, setMoreOpen] = useState(false);
+  const [addHost, setAddHost] = useState<HTMLElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
   const [callingFilter, setCallingFilter] = useState<string[]>([]);
@@ -129,7 +138,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
     if (next === tab && !unitId) return;
     const href = next === "dashboard" ? "/" : `/?tab=${next}`;
     const destination = unitId && next === "units" ? `${href}&unit=${unitId}` : href;
-    if (unitId) router.push(destination);
+    if (unitId || managementSection) router.push(destination);
     else window.history.pushState(null, "", destination);
     content.current?.scrollTo({ top: 0 });
   }
@@ -182,7 +191,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
           <button className="icon-button" aria-label="Dismiss status" onClick={() => setMessage("")}><X size={16} /></button>
         </div>}
 
-        {tab === "dashboard" && <FamilyHistoryDashboard units={directory.units} {...familyHistory} />}
+        {tab === "dashboard" && <FamilyHistoryDashboard units={directory.units} {...familyHistory} addHost={addHost} />}
 
         {tab === "people" && <section aria-labelledby="people-heading">
           <div className="section-heading">
@@ -334,9 +343,12 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
         </section>}
 
         {tab === "units" && (detailUnit
-          ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} familyHistory={familyHistory} journal={journal} focusActivity={focusActivity} getInvolved={getInvolved} />
-          : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} units={directory.units} buildings={directory.buildings}
-              languages={directory.languages} edit={setEditor} />)}
+          ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} familyHistory={familyHistory}
+              journal={journal} focusActivity={focusActivity} getInvolved={getInvolved} visits={unitVisits} userId={userId} addHost={addHost} />
+          : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} directory={directory} />)}
+
+        {tab === "buildings" && <BuildingsView directory={directory} edit={setEditor} addHost={addHost} />}
+        {tab === "languages" && <LanguagesView directory={directory} edit={setEditor} addHost={addHost} />}
 
         {tab === "visits" && <VisitPlanner directory={directory} userId={userId} />}
 
@@ -353,7 +365,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
       </main>
       </div>
 
-      <footer className="directory-footer">
+      <footer className="directory-footer" ref={detailUnit || tab === "dashboard" || managementSection ? setAddHost : undefined}>
         {recipientCount > 0 && <aside className="selection-bar" aria-label="Email selection">
           <div className="shell selection-inner">
             <div className="selection-summary">
@@ -377,7 +389,7 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
               <Icon size={22} aria-hidden />{label}
             </button>
           ))}
-          <button type="button" aria-haspopup="dialog" aria-expanded={moreOpen} data-active={tab === "callings" || tab === "access"}
+          <button type="button" aria-haspopup="dialog" aria-expanded={moreOpen} data-active={Boolean(managementSection) || tab === "callings" || tab === "access"}
             onClick={() => setMoreOpen(true)}>
             <Ellipsis size={22} aria-hidden />More
           </button>
@@ -392,6 +404,15 @@ export function DirectoryApp({ unitId, directory, admin, email, userId, mailRead
               <span>{label}{"description" in section && <small>{section.description}</small>}</span>
             </button>;
           })}
+          {managementLinks.map(({ id, label, Icon }) => (
+            <Link key={id} href={`/${id}`} prefetch={false} aria-current={id === tab ? "page" : undefined}
+              onNavigate={() => {
+                setMoreOpen(false);
+                content.current?.scrollTo({ top: 0 });
+              }}>
+              <Icon size={20} aria-hidden />{label}
+            </Link>
+          ))}
         </nav>
       </Modal>}
       {manualCopy && <Modal title="Copy email addresses" close={() => setManualCopy("")}>
