@@ -88,7 +88,10 @@ export function VisitPlanner({ directory, userId }: { directory: Directory; user
 
   async function resize(event: VisitEvent, start: number, end: number) {
     try {
-      const response = await saveVisit({ ...event, start_minute: start, end_minute: end });
+      const response = await saveVisit({
+        id: event.id, unit_id: event.unit_id, kind: event.kind, event_date: event.event_date,
+        start_minute: start, end_minute: end,
+      });
       if (response.error) setNotice({ text: response.error, error: true });
       else {
         setResult((previous) => previous?.key === queryKey ? { ...previous,
@@ -108,7 +111,7 @@ export function VisitPlanner({ directory, userId }: { directory: Directory; user
 
   return <section aria-labelledby="visits-heading">
     <div className="section-heading visit-heading">
-      <h1 id="visits-heading">Visits</h1>
+      <h1 id="visits-heading">My Calendar</h1>
       <label className="check"><input type="checkbox" checked={includeTeam}
         onChange={(event) => setIncludeTeam(event.target.checked)} />Show other users’ visits</label>
     </div>
@@ -184,7 +187,8 @@ export function VisitPlanner({ directory, userId }: { directory: Directory; user
       </div>
     </div>
     {editor && <VisitEditor entry={editor} editable={!editor.event || editor.event.owner_id === userId}
-      building={buildings.get(editor.unit?.building_id ?? "")} close={() => setEditor(null)}
+      building={buildings.get(editor.unit?.building_id ?? "")} parentUnit={units.get(editor.unit?.parent_id ?? "")}
+      close={() => setEditor(null)}
       done={(day, message) => { setEditor(null); afterChange(day, message); }} />}
   </section>;
 }

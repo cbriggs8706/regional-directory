@@ -2,12 +2,12 @@
 
 import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type ReactNode } from "react";
 import Image from "next/image";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { focusTypes, focusTypeLabels, type FocusType } from "../lib/focus-people";
 import { addCallingHolder, addStakeUnits, deleteRecord, saveBuilding, saveRecord, saveSchedulerAssignment, type Resource } from "./actions";
 import {
   buildingPhotoMaxBytes, buildingPhotoTypes, buildingPhotoUrl, formatBuildingAddress,
-  callingLevelLabel, callingLevels, callingPath, compareCallingOrder, hasSacramentMeeting, isBuildingScheduler, parentKinds, unitLabels, unitPath,
+  callingLevelLabel, callingLevels, callingPath, compareCallingOrder, hasSacramentMeeting, isBuildingScheduler, parentKinds, unitFacebookUrls, unitLabels, unitPath,
   type Assignment, type Building, type CallingLevel, type CallingType, type Contact, type Directory, type Language, type Organization, type Position,
   type Conference, type Unit, type UnitKind,
 } from "../lib/directory";
@@ -104,6 +104,26 @@ export function ContactFields({ contact }: { contact?: Contact }) {
   </>;
 }
 
+function FacebookUrlFields({ urls, disabled }: { urls: string[]; disabled: boolean }) {
+  const [fields, setFields] = useState(() => (urls.length ? urls : [""]).map((url, id) => ({ url, id })));
+  const nextId = useRef(fields.length);
+
+  return <div className="stack">
+    {fields.map(({ url, id }, index) => <div className="facebook-url-field" key={id}>
+      <label>Facebook URL{fields.length > 1 ? ` ${index + 1}` : ""} <span className="optional">optional</span>
+        <input name="facebook_urls" type="url" autoCapitalize="none" placeholder="https://www.facebook.com/"
+          maxLength={2048} defaultValue={url} />
+      </label>
+      <button type="button" className="icon-button" disabled={disabled} aria-label={`Remove Facebook URL ${index + 1}`}
+        onClick={() => setFields((current) => current.filter((field) => field.id !== id))}><X size={18} aria-hidden /></button>
+    </div>)}
+    <button type="button" className="text-button add-facebook-url" disabled={disabled} onClick={() => {
+      const id = nextId.current++;
+      setFields((current) => [...current, { url: "", id }]);
+    }}><Plus size={16} aria-hidden /> Add Facebook URL</button>
+  </div>;
+}
+
 function CongregationOptions({ units }: { units: Unit[] }) {
   const unitsById = new Map(units.map((unit) => [unit.id, unit]));
   return units.filter(({ kind }) => hasSacramentMeeting(kind))
@@ -119,6 +139,35 @@ export function HomeWardField({ units, currentId }: { units: Unit[]; currentId?:
       <CongregationOptions units={units} />
     </select>
   </label>;
+}
+
+function parseAssignmentLabels(value: string) {
+  return [...new Set(value.split(",").map((label) => label.trim()).filter(Boolean))];
+}
+
+function AssignmentLabelsField({ assignments, initialLabels, disabled }: {
+  assignments: Assignment[]; initialLabels?: string[]; disabled: boolean;
+}) {
+  const [value, setValue] = useState(initialLabels?.join(", ") ?? "");
+  const selected = parseAssignmentLabels(value);
+  const existing = [...new Set(assignments.flatMap((assignment) => assignment.assignment_labels))]
+    .sort((a, b) => a.localeCompare(b));
+
+  return <div className="stack">
+    <label>Assignments <span className="optional">optional, comma-separated</span>
+      <input name="assignment_labels" value={value} placeholder="Type an assignment" disabled={disabled}
+        onChange={(event) => setValue(event.target.value)} />
+    </label>
+    {existing.length > 0 && <ul className="chips assignment-label-options" aria-label="Existing assignments">
+      {existing.map((label) => <li key={label}>
+        <button type="button" className="button" aria-pressed={selected.includes(label)} disabled={disabled}
+          onClick={() => setValue((current) => {
+            const labels = parseAssignmentLabels(current);
+            return (labels.includes(label) ? labels.filter((item) => item !== label) : [...labels, label]).join(", ");
+          })}>{label}</button>
+      </li>)}
+    </ul>}
+  </div>;
 }
 
 export function Editor({ state, directory, close }: { state: EditorState; directory: Directory; close: () => void }) {
@@ -139,7 +188,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
   const [kind, setKind] = useState<UnitKind>(
     state.resource === "units" ? state.row?.kind ?? (state.parent ? "council" : "region") : "region",
   );
-  const canHaveWebsite = kind === "stake" || hasSacramentMeeting(kind);
+  const canHaveUnitLinks = kind === "stake" || hasSacramentMeeting(kind);
   const [unitLanguage, setUnitLanguage] = useState(state.resource === "units" ? state.row?.language_id ?? "" : "");
   const [badgeColor, setBadgeColor] = useState(state.resource === "languages" ? languageColor(state.row) ?? "gray" : "gray");
   const [sacramentFirst, setSacramentFirst] = useState(
@@ -157,7 +206,10 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
       state.resource === "organizations" ? state.row?.level ?? state.defaults?.level : undefined) ?? "ward",
   );
   const [retired, setRetired] = useState(Boolean(state.resource === "positions" && state.row?.retired_on));
-  const [newContact, setNewContact] = useState(false);
+  const [newContact, setNewContact] = useState(true);
+  const [contactQuery, setContactQuery] = useState("");
+  const [selectedContactId, setSelectedContactId] = useState("");
+  const contactSearch = useRef<HTMLInputElement>(null);
   const types = new Map(directory.calling_types.map((type) => [type.id, type]));
   const assignmentType = state.resource === "assignments"
     ? (state.position ? types.get(state.position.calling_type_id) : state.callingType)
@@ -167,22 +219,28 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
     id: building.id, address: formatBuildingAddress(building),
   })).sort((a, b) => a.address.localeCompare(b.address)) : [];
   const units = new Map(directory.units.map((unit) => [unit.id, unit]));
-  const assignmentContactId = state.resource === "assignments" ? state.row?.contact_id : undefined;
-  const sortedContacts = directory.contacts.filter((person) => !person.focus_type || person.id === assignmentContactId)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const contactQueryTerms = contactQuery.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+  const matchingContacts = resource === "assignments" && !row && !newContact && !selectedContactId && contactQueryTerms.length
+    ? directory.contacts.filter((person) => !person.focus_type && contactQueryTerms.every((term) => person.name.toLocaleLowerCase().includes(term)))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    : [];
   const organizations = new Map(directory.organizations.map((organization) => [organization.id, organization]));
   const levelOrganizations = directory.organizations.filter((organization) => organization.level === level).sort(compareCallingOrder);
   const typeNames = new Map(directory.calling_types.map((type) => [type.id, callingPath(type, organizations)]));
   const languages = [...directory.languages].sort((a, b) => a.name.localeCompare(b.name));
   const hasAssignments = resource === "positions" && directory.assignments.some((assignment) => assignment.position_id === state.row?.id);
-  const pastAssignment = state.resource === "assignments" && state.position && (Boolean(state.position.retired_on) ||
-    (!state.position.multiple_holders && directory.assignments.some((assignment) => assignment.position_id === state.position.id
-      && assignment.id !== state.row?.id && !assignment.released_on)));
+  const pastAssignment = state.resource === "assignments" && Boolean(state.position?.retired_on);
   const lockLevel = (state.resource === "calling_types" && directory.positions.some((position) => position.calling_type_id === state.row?.id)) ||
     (state.resource === "organizations" && directory.calling_types.some((type) => type.organization_id === state.row?.id));
   const lockKind = resource === "units" && (directory.units.some((unit) => unit.parent_id === state.row?.id)
     || directory.positions.some((position) => position.unit_id === state.row?.id)
     || directory.buildings.some((building) => building.agent_stake_id && building.agent_stake_id === state.row?.id));
+
+  function selectContact(person: Contact) {
+    setSelectedContactId(person.id);
+    setContactQuery(person.name);
+    contactSearch.current?.focus();
+  }
 
   async function run(operation: () => Promise<{ error: string | null }>) {
     setBusy(true);
@@ -245,9 +303,13 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
       case "units": {
         const meeting = hasSacramentMeeting(kind);
         const first = optional("sacrament_meeting_first");
+        const tfhCouncilTime = meeting ? optional("tfh_coordinating_council_time") : null;
+        const stakeCouncilTime = kind === "stake" ? optional("stake_council_time") : null;
+        const facebookUrls = canHaveUnitLinks ? data.getAll("facebook_urls").map((url) => String(url).trim()).filter(Boolean) : [];
         values = {
           name: value("name"), kind, parent_id: kind === "region" ? null : optional("parent_id"),
-          website_url: canHaveWebsite ? optional("website_url") : null,
+          website_url: canHaveUnitLinks ? optional("website_url") : null,
+          ...(facebookUrls.length || unitFacebookUrls(state.row).length ? { facebook_urls: facebookUrls } : {}),
           building_id: optional("building_id"),
           language_id: meeting ? optional("language_id") : null,
           has_sub_congregation: meeting && hasSubCongregation,
@@ -256,6 +318,8 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
           sacrament_meeting_first: meeting && first !== null ? first === "yes" : null,
           first_meeting_time: meeting && first === "no" ? optional("first_meeting_time") : null,
           council_meeting_time: meeting ? optional("council_meeting_time") : null,
+          ...(tfhCouncilTime || state.row?.tfh_coordinating_council_time ? { tfh_coordinating_council_time: tfhCouncilTime } : {}),
+          ...(stakeCouncilTime || state.row?.stake_council_time ? { stake_council_time: stakeCouncilTime } : {}),
           notes: meeting ? optional("notes") : null,
         };
         break;
@@ -282,30 +346,30 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
         values = { name: value("name"), level, sort_order: optional("sort_order") === null ? null : Number(value("sort_order")) };
         break;
       case "calling_types":
-        values = { name: value("name"), level, organization_id: value("organization_id"),
-          default_multiple_holders: data.has("default_multiple_holders") };
+        values = { name: value("name"), level, organization_id: value("organization_id") };
         break;
       case "positions":
         values = {
           unit_id: hasAssignments ? state.row?.unit_id : value("unit_id"),
           calling_type_id: hasAssignments ? state.row?.calling_type_id : value("calling_type_id"),
-          level, multiple_holders: data.has("multiple_holders"), retired_on: optional("retired_on"),
+          level, retired_on: optional("retired_on"),
           successor_id: retired ? optional("successor_id") : null,
         };
         break;
       case "assignments": {
         const details = {
           sustained_on: optional("sustained_on"), released_on: optional("released_on"),
-          assignment_labels: [...new Set(value("assignment_labels").split(",").map((label) => label.trim()).filter(Boolean))],
+          assignment_labels: parseAssignmentLabels(value("assignment_labels")),
         };
         const buildingIds = canAssignBuildings ? data.getAll("building_ids") : undefined;
         if (!state.row) {
+          if (!newContact && !selectedContactId) return;
           const unitId = state.position ? state.position.unit_id : state.unit.id;
           const callingTypeId = state.position ? state.position.calling_type_id : state.callingType?.id;
           const standardRole = "standardRole" in state ? state.standardRole : undefined;
           await run(() => addCallingHolder({
             unit_id: unitId, calling_type_id: callingTypeId, standard_role: standardRole, ...details,
-            contact_id: newContact ? null : optional("contact_id"),
+            contact_id: newContact ? null : selectedContactId,
             new_contact_name: newContact ? optional("name") : null,
             new_contact_phone: newContact ? optional("phone") : null,
             new_contact_email: newContact ? optional("email") : null,
@@ -395,10 +459,13 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
                   <option key={unit.id} value={unit.id}>{unitPath(unit, units, "dropdown")}</option>)}
               </select>
             </label>}
-            {canHaveWebsite && <label>Website URL <span className="optional">optional</span>
-              <input name="website_url" type="url" autoCapitalize="none" placeholder="https://"
-                maxLength={2048} defaultValue={state.row?.website_url ?? ""} />
-            </label>}
+            {canHaveUnitLinks && <>
+              <label>Website URL <span className="optional">optional</span>
+                <input name="website_url" type="url" autoCapitalize="none" placeholder="https://"
+                  maxLength={2048} defaultValue={state.row?.website_url ?? ""} />
+              </label>
+              <FacebookUrlFields urls={unitFacebookUrls(state.row)} disabled={busy} />
+            </>}
             <label>Building <span className="optional">optional</span>
               <select name="building_id" defaultValue={state.row?.building_id ?? ""}>
                 <option value="">Choose a building</option>
@@ -447,10 +514,16 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               <label>{unitLabels[kind]} council start time
                 <input name="council_meeting_time" type="time" defaultValue={state.row?.council_meeting_time?.slice(0, 5)} />
               </label>
+              <label>T&amp;FH Coordinating Council start time
+                <input name="tfh_coordinating_council_time" type="time" defaultValue={state.row?.tfh_coordinating_council_time?.slice(0, 5)} />
+              </label>
               <label>Notes <span className="optional">optional</span>
                 <textarea name="notes" rows={3} maxLength={2000} defaultValue={state.row?.notes ?? ""} />
               </label>
             </>}
+            {kind === "stake" && <label>Stake Council start time
+              <input name="stake_council_time" type="time" defaultValue={state.row?.stake_council_time?.slice(0, 5)} />
+            </label>}
           </>}
           {state.resource === "buildings" && <>
             <label>Street address
@@ -531,10 +604,6 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               </select>
               {levelOrganizations.length === 0 && <span className="field-help">Add an organization for this level first.</span>}
             </label>
-            <label className="check"><input name="default_multiple_holders" type="checkbox" defaultChecked={state.row?.default_multiple_holders} />
-              Allow multiple current holders by default
-            </label>
-            {state.row && <p className="field-help">Edit the calling in a unit to change its existing holder limit.</p>}
           </>}
           {state.resource === "positions" && <>
             <label>Calling type<select key={`type-${level}`} name="calling_type_id" required disabled={hasAssignments}
@@ -549,9 +618,6 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               {directory.units.filter((unit) => unit.level === level).map((unit) =>
                 <option key={unit.id} value={unit.id}>{unitPath(unit, units, "dropdown")}</option>)}
             </select></label>
-            <label className="check"><input name="multiple_holders" type="checkbox" defaultChecked={state.row?.multiple_holders ?? state.callingType?.default_multiple_holders} />
-              Allow multiple current holders
-            </label>
             {state.row && <>
               <label className="check"><input type="checkbox" checked={retired} onChange={(event) => setRetired(event.target.checked)} />
                 Retire this calling in this unit
@@ -574,15 +640,42 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               ? `${typeNames.get(state.position.calling_type_id)} · ${units.get(state.position.unit_id)?.name}`
               : `${state.callingType ? callingPath(state.callingType, organizations)
                 : standardCallingGroups[state.standardRole.group].roles[state.standardRole.index]} · ${state.unit.name}`}</p>
-            <label>Person<select name="contact_id" defaultValue={state.row?.contact_id ?? ""} disabled={Boolean(state.row)} required
-              onChange={(event) => setNewContact(event.target.value === "new")}>
-              <option value="">Choose a contact</option>
-              {!state.row && <option value="new">Add a new person</option>}
-              {sortedContacts.map((contact) => <option key={contact.id} value={contact.id}>
-                {contact.name}{contact.email ? ` · ${contact.email}` : ""}
-              </option>)}
-            </select></label>
-            {newContact && <><ContactFields /><HomeWardField units={directory.units} /></>}
+            {state.row ? <label>Person
+              <input value={directory.contacts.find((person) => person.id === state.row?.contact_id)?.name ?? ""} readOnly />
+            </label> : <>
+              <fieldset>
+                <legend>Person</legend>
+                <div className="assignment-person-modes">
+                  <button type="button" className="button" aria-pressed={newContact} disabled={busy}
+                    onClick={() => setNewContact(true)}>New contact</button>
+                  <button type="button" className="button" aria-pressed={!newContact} disabled={busy}
+                    onClick={() => setNewContact(false)}>Existing contact</button>
+                </div>
+                <div hidden={!newContact}>
+                  <fieldset disabled={!newContact || busy}><ContactFields /><HomeWardField units={directory.units} /></fieldset>
+                </div>
+                {!newContact && <>
+                  <label>Search by name
+                    <input ref={contactSearch} type="search" value={contactQuery} placeholder="Enter a name"
+                      autoFocus autoComplete="off" disabled={busy} onChange={(event) => {
+                        setContactQuery(event.target.value);
+                        setSelectedContactId("");
+                      }} onKeyDown={(event) => {
+                        if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                        event.preventDefault();
+                        if (matchingContacts.length === 1) selectContact(matchingContacts[0]);
+                      }} />
+                  </label>
+                  {matchingContacts.length > 0 && <ul className="assignment-contact-results" aria-label="Matching contacts">
+                    {matchingContacts.map((person) => <li key={person.id}>
+                      <button type="button" className="button" onClick={() => selectContact(person)}>{person.name}</button>
+                    </li>)}
+                  </ul>}
+                  {!selectedContactId && contactQueryTerms.length > 0 && matchingContacts.length === 0 &&
+                    <p className="field-help" role="status">No contacts found.</p>}
+                </>}
+              </fieldset>
+            </>}
             {canAssignBuildings && <fieldset>
               <legend>Buildings <span className="optional">optional</span></legend>
               {buildingOptions.length ? <div className="assignment-building-options">
@@ -593,14 +686,14 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
                 </label>)}
               </div> : <p className="field-help">Add buildings under Units → Buildings.</p>}
             </fieldset>}
-            <label>Assignments <span className="optional">optional, comma-separated</span>
-              <input name="assignment_labels" defaultValue={state.row?.assignment_labels.join(", ")} />
-            </label>
+            <AssignmentLabelsField assignments={directory.assignments} initialLabels={state.row?.assignment_labels} disabled={busy} />
             <label>Sustained date <span className="optional">optional</span><input type="date" name="sustained_on" defaultValue={state.row?.sustained_on ?? ""} /></label>
-            <label>Released date {!pastAssignment && <span className="optional">optional</span>}
+            {state.row || pastAssignment ? <label>Release date {!pastAssignment && <span className="optional">optional</span>}
               <input type="date" name="released_on" defaultValue={state.row?.released_on ?? ""} required={pastAssignment} />
-            </label>
-            {!pastAssignment && <p className="field-help">Leave the released date blank for a current holder.</p>}
+            </label> : <details>
+              <summary className="text-button">Record a past holder</summary>
+              <label>Release date<input type="date" name="released_on" /></label>
+            </details>}
           </>}
           {state.resource === "directory_access" && <label>Google account email<input name="email" type="email" maxLength={254} required /></label>}
           {error && <p className="notice error" role="alert">{error}</p>}
@@ -609,7 +702,9 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               setError(""); setConfirmDelete(true);
             }}>Delete</button>}
             <button type="button" className="button" disabled={busy} onClick={close}>Cancel</button>
-            <button className="button primary" disabled={busy}>{busy ? "Saving…" : resource === "directory_access" ? "Grant access" : "Save changes"}</button>
+            <button className="button primary" disabled={busy || (resource === "assignments" && !row && !newContact && !selectedContactId)}>
+              {busy ? "Saving…" : resource === "directory_access" ? "Grant access" : "Save changes"}
+            </button>
           </div>
         </form>
         {stake && kind === "stake" && <form className="modal-body stack stake-add-units" onSubmit={submitStakeUnits}>

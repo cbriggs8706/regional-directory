@@ -33,7 +33,7 @@ async function loadUnitVisits(client: Viewer["client"], unitId: string): Promise
   const events: VisitEvent[] = [];
   for (let start = 0; ; start += 500) {
     const { data, error } = await client.from("visit_events")
-      .select("id,owner_id,owner_email,unit_id,title,event_date,kind,start_minute,end_minute")
+      .select("*")
       .eq("unit_id", unitId).order("event_date").order("id").range(start, start + 499);
     if (error) return { ...clock, events: [], loadError: "Could not load scheduled visits." };
     events.push(...data as VisitEvent[]);

@@ -4,13 +4,18 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getViewer } from "../lib/supabase";
 import { agentKinds } from "../lib/organizations";
+import { socialChannels } from "../lib/social-links";
 import { journalNotesMaxLength } from "../lib/unit-journal";
 
 const id = z.uuid();
 const name = z.string().trim().min(1).max(150);
 const notes = z.string().trim().max(journalNotesMaxLength).transform((value) => value || null);
-const minute = z.number().int().min(0).max(1439).nullable();
+const eventDate = z.iso.date().refine((value) => value >= "0001-01-01");
 const website = z.union([z.literal("").transform(() => null), z.url({ protocol: /^https?$/ }).max(2048)]);
+const socialLinks = z.array(z.object({
+  channel: z.enum(Object.keys(socialChannels) as (keyof typeof socialChannels)[]),
+  url: z.string().trim().pipe(z.url({ protocol: /^https?$/, normalize: true })).pipe(z.string().max(2048)),
+}));
 const assignmentFields = { title_id: id, active: z.boolean() };
 const assignmentValues = z.union([
   z.strictObject({ ...assignmentFields, contact_id: id }),
@@ -24,14 +29,16 @@ const assignmentValues = z.union([
 const mutationSchema = z.discriminatedUnion("resource", [
   z.object({ resource: z.literal("directory_organizations"), id: id.optional(), values: z.object({
     name, type: z.string().trim().min(1).max(100), agent_id: id, agent_kind: z.enum(agentKinds),
-    building_id: id.nullable(), website_url: website, notes,
+    building_id: id.nullable(), website_url: website, social_links: socialLinks.optional(), notes,
   }) }),
   z.object({ resource: z.literal("organization_titles"), id: id.optional(), organizationId: id, values: z.object({ name }) }),
   z.object({ resource: z.literal("organization_assignments"), organizationId: id, values: assignmentValues }),
   z.object({ resource: z.literal("assignment_status"), organizationId: id, id, titleId: id, active: z.boolean() }),
   z.object({ resource: z.literal("organization_events"), id: id.optional(), organizationId: id, values: z.object({
-    title: name, event_date: z.iso.date(), start_minute: minute, end_minute: minute, notes,
-  }).refine(({ start_minute, end_minute }) => end_minute === null || (start_minute !== null && end_minute > start_minute)) }),
+    title: name, event_date: eventDate, end_date: eventDate.nullable(), notes,
+  }).refine(({ event_date, end_date }) => end_date === null || end_date >= event_date, {
+    path: ["end_date"], error: "End date must be on or after the start date.",
+  }) }),
 ]);
 
 const removalSchema = z.object({
@@ -55,10 +62,20 @@ export async function saveOrganizationRecord(input: unknown) {
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = mutationSchema.safeParse(input);
   if (!parsed.success) {
-    const addingAssignment = typeof input === "object" && input !== null && "resource" in input &&
-      input.resource === "organization_assignments";
-    return { error: addingAssignment ? "Choose a person or check the new person’s name and contact information."
-      : "Check the required fields, website, and event times." };
+    const resource = typeof input === "object" && input !== null && "resource" in input ? input.resource : undefined;
+    if (parsed.error.issues.some((issue) => issue.path[1] === "social_links")) {
+      return { error: "Choose a channel and enter a valid http:// or https:// URL for each social link." };
+    }
+    if (resource === "organization_assignments") {
+      return { error: "Choose a person or check the new person’s name and contact information." };
+    }
+    if (resource === "organization_events") {
+      const dateOrderError = parsed.error.issues.find((issue) =>
+        issue.code === "custom" && issue.path.join(".") === "values.end_date" &&
+        issue.message === "End date must be on or after the start date.");
+      return { error: dateOrderError?.message ?? "Check the event title, dates, and notes." };
+    }
+    return { error: "Check the required fields and website." };
   }
   const record = parsed.data;
   const { client } = viewer;
@@ -103,6 +120,10 @@ export async function saveOrganizationRecord(input: unknown) {
     ? "This person already has this assignment. Edit their existing assignment to change its status."
     : "That name is already in use." };
   if (result.error?.code === "23503") return { error: "A selected record is unavailable. Refresh and try again." };
+  if (record.resource === "directory_organizations" && (result.error?.code === "PGRST204" || result.error?.code === "42703")
+    && result.error.message.includes("social_links")) {
+    return { error: "Apply the organization social links migration in Supabase to save these links." };
+  }
   if (result.error || !result.data) return { error: "Could not save this record. Refresh and try again." };
   refreshOrganizations();
   return { error: null, id: result.data.id as string };

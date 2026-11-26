@@ -31,6 +31,7 @@ export async function signOut() {
 const name = z.string().trim().min(1).max(150);
 const email = z.string().trim().toLowerCase().max(254).pipe(z.email());
 const phone = z.string().trim().max(50).nullable();
+const contactDetails = z.object({ email: email.nullable(), phone });
 const uuid = z.uuid();
 const date = z.iso.date().nullable();
 const conferenceDates = { begins_on: z.iso.date(), ends_on: z.iso.date() };
@@ -39,12 +40,14 @@ const meetingTime = z.iso.time({ precision: -1 }).nullable().optional();
 const assignmentDetails = { sustained_on: date, released_on: date, assignment_labels: z.array(z.string().trim().min(1)) };
 const buildingIds = z.array(uuid);
 const homeWard = uuid.nullable().optional();
+const webUrl = z.string().trim().pipe(z.url({ protocol: /^https?$/, normalize: true }))
+  .pipe(z.string().max(2048));
 const schemas = {
   units: z.object({
     name, kind: z.enum(["region", "council", "stake", "ward", "branch"]),
     parent_id: uuid.nullable(),
-    website_url: z.string().trim().pipe(z.url({ protocol: /^https?$/, normalize: true }))
-      .pipe(z.string().max(2048)).nullable().optional(),
+    website_url: webUrl.nullable().optional(),
+    facebook_urls: z.array(webUrl).transform((urls) => [...new Set(urls)]).optional(),
     building_id: uuid.nullable().optional(),
     language_id: uuid.nullable().optional(),
     has_sub_congregation: z.boolean().optional(),
@@ -53,6 +56,8 @@ const schemas = {
     sacrament_meeting_first: z.boolean().nullable().optional(),
     first_meeting_time: meetingTime,
     council_meeting_time: meetingTime,
+    tfh_coordinating_council_time: meetingTime,
+    stake_council_time: meetingTime,
     notes: z.string().trim().max(2000).nullable().optional(),
   }),
   buildings: z.object({
@@ -66,9 +71,9 @@ const schemas = {
   ward_conferences: z.object({ unit_id: uuid, ...conferenceDates }).refine(validConferenceDates),
   languages: z.object({ name, color: z.enum(languageColors) }),
   contacts: z.discriminatedUnion("focus_type", [
-    z.object({ focus_type: z.undefined().optional(), name, email: email.nullable(), phone, home_ward_id: homeWard }),
+    contactDetails.extend({ focus_type: z.undefined().optional(), name, home_ward_id: homeWard }),
     z.object({
-      focus_type: z.enum(focusTypes), first_name: name, last_name: name, email: email.nullable(), phone,
+      ...contactDetails.shape, focus_type: z.enum(focusTypes), first_name: name, last_name: name,
       ward_id: uuid, home_ward_id: homeWard, is_whatsapp: z.boolean(), baptized_on: date,
       helper_number: z.string().trim().regex(/^[0-9]+$/).nullable(),
       pid: z.string().trim().regex(/^[A-Za-z0-9]+$/).nullable(),
@@ -76,10 +81,10 @@ const schemas = {
       .transform((person) => ({ ...person, name: `${person.first_name} ${person.last_name}` })),
   ]),
   organizations: z.object({ name, level: z.enum(callingLevels), sort_order: z.int32().positive().nullable() }),
-  calling_types: z.object({ name, level: z.enum(callingLevels), organization_id: uuid, default_multiple_holders: z.boolean() }),
+  calling_types: z.object({ name, level: z.enum(callingLevels), organization_id: uuid }),
   positions: z.object({
     unit_id: uuid, calling_type_id: uuid, level: z.enum(callingLevels),
-    multiple_holders: z.boolean(), retired_on: date, successor_id: uuid.nullable(),
+    retired_on: date, successor_id: uuid.nullable(),
   }),
   assignments: z.object({ position_id: uuid, contact_id: uuid, ...assignmentDetails }),
   directory_access: z.object({ email }),
@@ -119,6 +124,23 @@ function revalidateDirectory() {
   revalidatePath("/languages");
 }
 
+export async function saveContactDetails(id: string, values: unknown) {
+  const viewer = await getViewer();
+  if (!viewer?.role) return { error: "You need approved directory access." };
+  if (!uuid.safeParse(id).success) return { error: "Invalid contact." };
+
+  const parsed = contactDetails.safeParse(values);
+  if (!parsed.success) return { error: "Check the phone number and email address." };
+
+  const { error } = await viewer.client.from("contacts")
+    .update(parsed.data).eq("id", id).select("id").single();
+  if (error) return { error: databaseError(error) };
+
+  revalidateDirectory();
+  revalidatePath("/organizations/[id]", "page");
+  return { error: null };
+}
+
 export async function saveRecord(resource: Exclude<Resource, "buildings">, id: string | null, values: unknown) {
   const viewer = await getViewer();
   if (!viewer?.role) return { error: "You need approved directory access." };
@@ -126,6 +148,9 @@ export async function saveRecord(resource: Exclude<Resource, "buildings">, id: s
   const parsed = schemas[resource].safeParse(values);
   if (!parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "website_url")) {
     return { error: "Enter a website URL that starts with http:// or https://." };
+  }
+  if (!parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "facebook_urls")) {
+    return { error: "Each Facebook URL must start with http:// or https:// and be at most 2048 characters." };
   }
   if (!parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "home_ward_id")) {
     return { error: "Choose an existing ward or branch for Home Ward." };
@@ -155,6 +180,13 @@ export async function saveRecord(resource: Exclude<Resource, "buildings">, id: s
   }
   if (resource === "languages" && (error?.code === "PGRST204" || error?.code === "42703")) {
     return { error: "Apply the language colors migration in Supabase to save this language." };
+  }
+  if (resource === "units" && (error?.code === "PGRST204" || error?.code === "42703") && error.message.includes("facebook_urls")) {
+    return { error: "Apply the Facebook URLs migration in Supabase to save these links." };
+  }
+  if (resource === "units" && (error?.code === "PGRST204" || error?.code === "42703") &&
+    /tfh_coordinating_council_time|stake_council_time/.test(error.message)) {
+    return { error: "Apply the unit council times migration in Supabase to save these meeting times." };
   }
   if (error) return { error: databaseError(error) };
   revalidateDirectory();
@@ -254,7 +286,7 @@ async function ensureStandardCalling(client: NonNullable<Awaited<ReturnType<type
   const hash = createHash("sha256").update(`standard-calling:${organization.id}:${group}:${index}`).digest("hex");
   const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
   const { error: insertError } = await client.from("calling_types").upsert({
-    id, name: title, organization_id: organization.id, level: template.level, default_multiple_holders: false,
+    id, name: title, organization_id: organization.id, level: template.level,
   }, { onConflict: "id", ignoreDuplicates: true });
   return insertError ? null : id;
 }

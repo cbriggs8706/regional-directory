@@ -1,6 +1,8 @@
 import { BookOpen, LockKeyhole } from "lucide-react";
+import { redirect } from "next/navigation";
 import { signIn, signOut } from "./actions";
 import { DirectoryPage } from "./directory-page";
+import { isAdminDirectoryTab } from "../lib/directory";
 import { getViewer, supabaseSettings } from "../lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -10,11 +12,11 @@ const authErrors: Record<string, string> = {
   configuration: "Set APP_URL before starting Google sign-in.",
 };
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ auth?: string }> }) {
+export default async function Home({ searchParams }: { searchParams: Promise<{ auth?: string; tab?: string | string[] }> }) {
   const viewer = await getViewer();
+  const { auth, tab } = await searchParams;
   if (!viewer?.role) {
     const ready = Boolean(supabaseSettings() && process.env.APP_URL);
-    const { auth } = await searchParams;
     return (
       <main className="sign-in">
         <section className="sign-in-card">
@@ -36,5 +38,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ a
     );
   }
 
+  if (viewer.role !== "admin" && isAdminDirectoryTab(Array.isArray(tab) ? tab[0] : tab)) redirect("/");
   return <DirectoryPage viewer={viewer} />;
 }

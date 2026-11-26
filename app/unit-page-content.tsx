@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RouteLink } from "./route-navigation";
 import { BookOpen, CalendarDays, ChartNoAxesColumn, ChevronDown, ChevronRight, ChartLine, Clock3, History, UserPlus } from "lucide-react";
-import { abbreviatedUnitName, hasSacramentMeeting, unitLabels, unitLineage, unitNameWithType, type Directory, type Unit } from "../lib/directory";
+import { abbreviatedUnitName, hasSacramentMeeting, unitFacebookUrls, unitLabels, unitLineage, unitNameWithType, type Directory, type Unit } from "../lib/directory";
 import { scopeWards } from "../lib/family-history";
 import { isOrganizationAgent, type OrganizationDirectory } from "../lib/organizations";
 import { todayInVisitZone } from "../lib/visits";
@@ -28,13 +28,14 @@ import { VisitEditor, type VisitEditorEntry } from "./visit-editor";
 const unitSections = ["overview", "reports", "get-involved", "units", "callings", "focus", "stewardships"] as const;
 const defaultSection = unitSections[0];
 
-export function UnitPageContent({ unit, directory, edit, data, currentMonth, userId, addHost, organizationDirectory }: {
+export function UnitPageContent({ unit, directory, edit, data, currentMonth, userId, addHost, admin, organizationDirectory }: {
   unit: Unit;
   directory: Directory;
   edit: (state: EditorState) => void;
   data: UnitDetailLoad;
   currentMonth: string;
   userId: string;
+  admin: boolean;
   addHost: HTMLElement | null;
   organizationDirectory: OrganizationDirectory;
 }) {
@@ -87,7 +88,8 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
   const stakeUnits = isWardOrBranch && conferenceStake ? directory.units
     .filter(({ parent_id, kind }) => parent_id === conferenceStake.id && hasSacramentMeeting(kind))
     .sort((a, b) => a.name.localeCompare(b.name)) : [];
-  const ancestors = unitLineage(unit, units).slice(0, -1);
+  const lineage = unitLineage(unit, units);
+  const ancestors = lineage.slice(0, -1);
 
   function closeUnitSwitcher() {
     const switcher = unitSwitcher.current;
@@ -139,10 +141,11 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
       </ol>
     </nav>}
     <BuildingPageHeader name={unitNameWithType(unit)} recordLabel="Unit" building={building} website={unit.website_url}
+      socialLinks={unitFacebookUrls(unit).map((url) => ({ channel: "facebook", url }))}
       facts={<UnitFacts unit={unit} languagesById={languagesById} />}
       edit={() => edit({ resource: "units", row: unit })} />
     <PageSectionTabs label="Unit sections" sections={sections} labels={sectionLabels} {...sectionNavigation} />
-    {section === "callings" && <UnitCallings unit={unit} directory={directory} edit={edit} title={sectionLabels.callings} />}
+    {section === "callings" && <UnitCallings unit={unit} directory={directory} edit={edit} title={sectionLabels.callings} admin={admin} />}
     {section === "stewardships" && <section className="unit-tab-section" aria-labelledby="stewardships-heading">
       <UnitSectionHeading id="stewardships-heading" title="Stewardships" unit={unit} />
       {organizationDirectory.loadError ? <p className="notice error" role="alert">{organizationDirectory.loadError}</p> :
@@ -215,7 +218,7 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
       } },
     ]} />
     {visitEditor && <VisitEditor entry={visitEditor} editable={!visitEditor.event || visitEditor.event.owner_id === userId}
-      building={building} close={() => setVisitEditor(null)} done={(_day, message) => {
+      building={building} parentUnit={parentUnit} eventScope={lineage} close={() => setVisitEditor(null)} done={(_day, message) => {
         setVisitEditor(null);
         setVisitStatus(message);
       }} />}

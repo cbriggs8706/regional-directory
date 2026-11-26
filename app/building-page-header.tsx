@@ -2,16 +2,26 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Image from "next/image";
-import { Globe, Maximize2, Pencil } from "lucide-react";
+import {
+  AtSign, Cloud, Facebook, Ghost, Globe, Instagram, Linkedin, Link2, Maximize2, MessageCircle,
+  Music2, Pencil, Twitch, X, Youtube, type LucideIcon,
+} from "lucide-react";
 import { buildingPhotoUrl, formatBuildingAddress, type Building } from "../lib/directory";
+import { socialChannels, type SocialChannel, type SocialLink } from "../lib/social-links";
 import { AddressLink } from "./address-link";
 import { Modal } from "./editor";
 
-export function BuildingPageHeader({ name, recordLabel, building, website, facts, children, edit }: {
+const socialIcons = {
+  facebook: Facebook, instagram: Instagram, youtube: Youtube, tiktok: Music2, x: X, threads: AtSign,
+  linkedin: Linkedin, whatsapp: MessageCircle, bluesky: Cloud, snapchat: Ghost, twitch: Twitch, other: Link2,
+} satisfies Record<SocialChannel, LucideIcon>;
+
+export function BuildingPageHeader({ name, recordLabel, building, website, socialLinks = [], facts, children, edit }: {
   name: string;
   recordLabel: "Unit" | "Organization";
   building?: Building;
   website: string | null;
+  socialLinks?: SocialLink[];
   facts: ReactNode;
   children?: ReactNode;
   edit: () => void;
@@ -21,6 +31,11 @@ export function BuildingPageHeader({ name, recordLabel, building, website, facts
   const cover = useRef<HTMLButtonElement>(null);
   const photo = building?.photo_path ? buildingPhotoUrl(building) : null;
   const address = building ? formatBuildingAddress(building) : null;
+  const channelTotals = new Map<SocialChannel, number>();
+  const channelIndexes = new Map<SocialChannel, number>();
+  for (const { channel } of socialLinks) {
+    channelTotals.set(channel, (channelTotals.get(channel) ?? 0) + 1);
+  }
 
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
 
@@ -34,13 +49,25 @@ export function BuildingPageHeader({ name, recordLabel, building, website, facts
         </button>
         <div className="unit-building-tags">{facts}</div>
       </div>}
-      <div className="unit-heading-row">
+      <div className={socialLinks.length > 1 ? "unit-heading-row unit-heading-row-wrap" : "unit-heading-row"}>
         <h1 ref={heading} tabIndex={-1}>{name}</h1>
         <div className="unit-heading-actions">
           <button type="button" className="icon-button" aria-label={`Edit ${name}`} title={`Edit ${recordLabel.toLowerCase()}`}
             onClick={edit}><Pencil size={18} aria-hidden /></button>
           {website && <a className="icon-button" href={website} target="_blank" rel="noopener noreferrer"
             aria-label={`${recordLabel} website`} title={`${recordLabel} website`}><Globe size={19} aria-hidden /></a>}
+          {socialLinks.map(({ channel, url }, index) => {
+            const channelIndex = (channelIndexes.get(channel) ?? 0) + 1;
+            channelIndexes.set(channel, channelIndex);
+            const numbered = (channelTotals.get(channel) ?? 0) > 1;
+            const label = `${recordLabel} ${socialChannels[channel]} link${numbered ? ` ${channelIndex}` : ""}`;
+            const Icon = socialIcons[channel];
+            return <a key={`${index}-${url}`} className="icon-button social-media-link" href={url} target="_blank"
+              rel="noopener noreferrer" aria-label={label} title={label}>
+              <Icon size={19} aria-hidden />
+              {numbered && <sup aria-hidden>{channelIndex}</sup>}
+            </a>;
+          })}
         </div>
       </div>
       {address && <p className="unit-heading-address"><AddressLink address={address} /></p>}

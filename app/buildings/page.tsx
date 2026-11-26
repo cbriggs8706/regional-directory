@@ -6,6 +6,6 @@ export const dynamic = "force-dynamic";
 
 export default async function BuildingsPage() {
   const viewer = await getViewer();
-  if (!viewer?.role) redirect("/");
+  if (viewer?.role !== "admin") redirect("/");
   return <DirectoryPage viewer={viewer} managementSection="buildings" />;
 }

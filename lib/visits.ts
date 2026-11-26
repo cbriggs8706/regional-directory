@@ -14,6 +14,7 @@ export type VisitEvent = {
   owner_email: string;
   unit_id: string | null;
   title: string | null;
+  notes?: string | null;
   event_date: string;
   kind: VisitKind;
   start_minute: number;
@@ -21,6 +22,13 @@ export type VisitEvent = {
 };
 
 export type UnitVisitData = { events: VisitEvent[]; today: string; minute: number; loadError: string | null };
+
+export type UnitDateEvent = {
+  id: string;
+  unitId: string;
+  title: string;
+  details: string;
+};
 
 export function visitClock() {
   const parts = new Intl.DateTimeFormat("en-US", {

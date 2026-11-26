@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RouteLink } from "./route-navigation";
 import { Building2, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Search, X } from "lucide-react";
-import { hasSacramentMeeting, unitNameWithType, type Building, type Directory, type Language, type Unit } from "../lib/directory";
+import { hasSacramentMeeting, unitLineage, unitNameWithType, type Building, type Directory, type Language, type Unit } from "../lib/directory";
 import { organizationLeaderSubtitles, type DirectoryOrganization, type OrganizationDirectory } from "../lib/organizations";
 import { unitLeaderSubtitles } from "../lib/standard-callings";
 import { UnitLanguageBadges } from "./unit-facts";
@@ -22,7 +22,7 @@ type BrowseState = {
 
 type UnitTreeProps = {
   childrenByParent: Map<string, Unit[]>;
-  organizationsByAgent: Map<string, DirectoryOrganization[]>;
+  organizationsByUnit: Map<string, DirectoryOrganization[]>;
   organizationLeaderSubtitles: Map<string, string>;
   buildingsById: Map<string, Building>;
   languagesById: Map<string, Language>;
@@ -37,16 +37,18 @@ function browseLinkId(unitId: string) {
   return `unit-browse-${unitId}`;
 }
 
-function OrganizationNode({ organization, tree, agent }: {
+function OrganizationNode({ organization, tree, agent, councilId }: {
   organization: DirectoryOrganization;
   tree: UnitTreeProps;
   agent?: Unit;
+  councilId?: string;
 }) {
   const leader = tree.organizationLeaderSubtitles.get(organization.id);
+  const browseId = councilId && councilId !== organization.agent_id ? `${organization.id}-${councilId}` : organization.id;
   return <li>
-    <BuildingThumbnailCard id={browseLinkId(organization.id)} href={`/organizations/${organization.id}`}
+    <BuildingThumbnailCard id={browseLinkId(browseId)} href={`/organizations/${organization.id}`}
       name={organization.name} building={tree.buildingsById.get(organization.building_id ?? "")}
-      className="unit-organization-card" onNavigate={() => tree.rememberNavigation(organization.id)}>
+      className="unit-organization-card" onNavigate={() => tree.rememberNavigation(browseId)}>
       {leader && <small>{leader}</small>}
       <small>{organization.type}</small>
       {agent && <small>{unitNameWithType(agent)}</small>}
@@ -66,7 +68,7 @@ function UnitNode({ unit, ...tree }: UnitTreeProps & { unit: Unit }) {
   }
 
   const children = tree.childrenByParent.get(unit.id) ?? [];
-  const organizations = tree.organizationsByAgent.get(unit.id) ?? [];
+  const organizations = tree.organizationsByUnit.get(unit.id) ?? [];
   const hasChildren = children.length > 0 || organizations.length > 0;
   const expanded = hasChildren && tree.isExpanded(unit.id);
   const childListId = `unit-children-${unit.id}`;
@@ -106,7 +108,8 @@ function UnitNode({ unit, ...tree }: UnitTreeProps & { unit: Unit }) {
       <div id={childListId} hidden={!expanded}>
         {expanded && <ul className={`unit-children${isStake ? " child-unit-grid congregation-grid" : ""}`}>
           {children.map((child) => <UnitNode key={child.id} unit={child} {...tree} />)}
-          {organizations.map((organization) => <OrganizationNode key={organization.id} organization={organization} tree={tree} />)}
+          {organizations.map((organization) => <OrganizationNode key={organization.id} organization={organization}
+            tree={tree} councilId={unit.kind === "council" ? unit.id : undefined} />)}
         </ul>}
       </div>
     </li>
@@ -128,7 +131,7 @@ export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
   const searchInput = useRef<HTMLInputElement>(null);
   const regions: Unit[] = [];
   const childrenByParent = new Map<string, Unit[]>();
-  const organizationsByAgent = new Map<string, DirectoryOrganization[]>();
+  const organizationsByUnit = new Map<string, DirectoryOrganization[]>();
   const congregationCounts = new Map<string, number>();
   const leaderSubtitles = unitLeaderSubtitles(directory);
   const languagesById = new Map(languages.map((language) => [language.id, language]));
@@ -208,10 +211,20 @@ export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
   }
 
   if (!nonEnglishOnly) {
-    for (const organization of [...organizations].sort((a, b) => a.name.localeCompare(b.name))) {
-      const siblings = organizationsByAgent.get(organization.agent_id) ?? [];
-      siblings.push(organization);
-      organizationsByAgent.set(organization.agent_id, siblings);
+    const sortedOrganizations = [...organizations].sort((a, b) => a.name.localeCompare(b.name));
+    function addOrganization(unitId: string, organization: DirectoryOrganization) {
+      const entries = organizationsByUnit.get(unitId) ?? [];
+      entries.push(organization);
+      organizationsByUnit.set(unitId, entries);
+    }
+
+    for (const organization of sortedOrganizations) addOrganization(organization.agent_id, organization);
+    for (const organization of sortedOrganizations) {
+      const agent = unitsById.get(organization.agent_id);
+      if (!agent || (agent.kind !== "stake" && !hasSacramentMeeting(agent.kind))) continue;
+
+      const council = unitLineage(agent, unitsById).find(({ kind }) => kind === "council");
+      if (council) addOrganization(council.id, organization);
     }
   }
 
@@ -226,10 +239,10 @@ export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
 
   const region = regions.find((entry) => entry.id === (regionId || browseRegionId)) ?? regions[0];
   const councils = region ? childrenByParent.get(region.id) ?? [] : [];
-  const regionOrganizations = region ? organizationsByAgent.get(region.id) ?? [] : [];
+  const regionOrganizations = region ? organizationsByUnit.get(region.id) ?? [] : [];
   const expandedByDefault = (unitId: string) => nonEnglishOnly || browsePath.has(unitId);
   const tree: UnitTreeProps = {
-    childrenByParent, organizationsByAgent, buildingsById, languagesById, leaderSubtitles, congregationCounts,
+    childrenByParent, organizationsByUnit, buildingsById, languagesById, leaderSubtitles, congregationCounts,
     organizationLeaderSubtitles: organizationLeaderSubtitles(organizationDirectory, directory.contacts),
     isExpanded: (unitId) => expandedUnits.get(unitId) ?? expandedByDefault(unitId),
     toggleExpanded: (unitId) => setExpandedUnits((current) =>
@@ -241,7 +254,7 @@ export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
   };
 
   const expandableUnits = councils.flatMap((council) => [council, ...(childrenByParent.get(council.id) ?? [])])
-    .filter((unit) => childrenByParent.has(unit.id) || organizationsByAgent.has(unit.id));
+    .filter((unit) => childrenByParent.has(unit.id) || organizationsByUnit.has(unit.id));
   const allExpanded = expandableUnits.every(({ id }) => tree.isExpanded(id));
 
   function toggleAll() {
@@ -253,9 +266,13 @@ export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
   }
 
   const query = search.trim().toLocaleLowerCase();
-  const searchResults: (Unit | DirectoryOrganization)[] = [];
+  const matches = new Map<string, Unit | DirectoryOrganization>();
   function searchOrganizations(organizations: DirectoryOrganization[]) {
-    searchResults.push(...organizations.filter(({ name, type }) => `${name} ${type}`.toLocaleLowerCase().includes(query)));
+    for (const organization of organizations) {
+      if (`${organization.name} ${organization.type}`.toLocaleLowerCase().includes(query)) {
+        matches.set(organization.id, organization);
+      }
+    }
   }
   if (query) {
     searchOrganizations(regionOrganizations);
@@ -265,12 +282,12 @@ export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
       const unit = remaining.pop()!;
       if (visited.has(unit.id)) continue;
       visited.add(unit.id);
-      if (unitNameWithType(unit).toLocaleLowerCase().includes(query)) searchResults.push(unit);
-      searchOrganizations(organizationsByAgent.get(unit.id) ?? []);
+      if (unitNameWithType(unit).toLocaleLowerCase().includes(query)) matches.set(unit.id, unit);
+      searchOrganizations(organizationsByUnit.get(unit.id) ?? []);
       remaining.push(...(childrenByParent.get(unit.id) ?? []));
     }
-    searchResults.sort((a, b) => a.name.localeCompare(b.name));
   }
+  const searchResults = [...matches.values()].sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <section aria-labelledby="units-heading">

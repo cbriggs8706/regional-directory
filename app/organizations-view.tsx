@@ -6,7 +6,7 @@ import { useState } from "react";
 import { abbreviatedUnitName, compareCallingOrder, unitLineage, unitNameWithType, type Directory } from "../lib/directory";
 import { journalEntryDateLabel } from "../lib/journal-report";
 import { agentLabel, agentName, type DirectoryOrganization, type OrganizationDetail, type OrganizationDirectory, type OrganizationEvent } from "../lib/organizations";
-import { formatVisitTime, visitClock } from "../lib/visits";
+import { todayInVisitZone } from "../lib/visits";
 import { AddMenu } from "./add-menu";
 import { BuildingPageHeader } from "./building-page-header";
 import { ReorderList } from "./calling-groups";
@@ -40,8 +40,8 @@ export function OrganizationList({ organizations, units }: { organizations: Dire
   </ul>;
 }
 
-export function OrganizationsView({ directory, records, detail, addHost }: {
-  directory: Directory; records: OrganizationDirectory; detail: OrganizationDetail | null; addHost: HTMLElement | null;
+export function OrganizationsView({ directory, records, detail, addHost, admin }: {
+  directory: Directory; records: OrganizationDirectory; detail: OrganizationDetail | null; addHost: HTMLElement | null; admin: boolean;
 }) {
   const [editor, setEditor] = useState<OrganizationEditorState | null>(null);
   const [newJournalEntry, setNewJournalEntry] = useState(false);
@@ -68,12 +68,13 @@ export function OrganizationsView({ directory, records, detail, addHost }: {
               {unit.kind === "region" || unit.kind === "council" ? abbreviatedUnitName(unit) : unitNameWithType(unit)}
             </RouteLink>
           </li>)}
-          {!agent && <li><RouteLink href="/organizations">Organizations</RouteLink></li>}
-          <li><span aria-hidden="true">/</span><span aria-current="page">{organization.name}</span></li>
+          {!agent && admin && <li><RouteLink href="/organizations">Organizations</RouteLink></li>}
+          <li>{(agent || admin) && <span aria-hidden="true">/</span>}<span aria-current="page">{organization.name}</span></li>
         </ol>
       </nav>
       <BuildingPageHeader name={organization.name} recordLabel="Organization" building={building}
-        website={organization.website_url} facts={<span className="chips"><span className="chip">{organization.type}</span></span>}
+        website={organization.website_url} socialLinks={organization.social_links}
+        facts={<span className="chips"><span className="chip">{organization.type}</span></span>}
         edit={() => setEditor({ resource: "directory_organizations", row: organization })}>
         {agent && <p className="unit-heading-address"><strong>{agentLabel(organization.agent_kind)}</strong>{" · "}
           <RouteLink href={`/units/${agent.id}?section=stewardships`}>{agentName(agent)}</RouteLink></p>}
@@ -81,6 +82,10 @@ export function OrganizationsView({ directory, records, detail, addHost }: {
       <PageSectionTabs label="Organization sections" sections={sections} labels={sectionLabels} {...sectionNavigation} />
       {section === "overview" && <section className="unit-tab-section" aria-labelledby="organization-overview-heading">
         <PageSectionHeading id="organization-overview-heading" title="Overview" name={organization.name} />
+        {organization.notes?.trim() && <section className="panel unit-page-notes" aria-labelledby="organization-notes-heading">
+          <h2 id="organization-notes-heading">Notes</h2>
+          <p className="unit-notes">{organization.notes}</p>
+        </section>}
         <PendingContent data={detail.events} fallback={<SectionSkeleton label="events" />}>
           {({ rows, error }) => <OrganizationEvents events={rows} loadError={error ? "Could not load events." : null} edit={(row) =>
             setEditor({ resource: "organization_events", organizationId: organization.id, row })} />}
@@ -89,9 +94,6 @@ export function OrganizationsView({ directory, records, detail, addHost }: {
           {(journal) => <UnitJournal organizationId={organization.id} journal={journal}
             newEntryOpen={newJournalEntry} closeNewEntry={() => setNewJournalEntry(false)} />}
         </PendingContent>
-        {organization.notes && <section className="panel unit-page-notes">
-          <h2>Notes</h2><p className="unit-notes">{organization.notes}</p>
-        </section>}
       </section>}
       {section === "assignments" && <OrganizationAssignments organizationId={organization.id} name={organization.name}
         contacts={directory.contacts} records={records} setEditor={setEditor} />}
@@ -195,21 +197,22 @@ function OrganizationAssignments({ organizationId, name, contacts, records, setE
 function OrganizationEvents({ events, loadError, edit }: {
   events: OrganizationEvent[]; loadError: string | null; edit: (event: OrganizationEvent) => void;
 }) {
-  const { today, minute } = visitClock();
-  const sorted = [...events].sort((a, b) => a.event_date.localeCompare(b.event_date) ||
-    (a.start_minute ?? -1) - (b.start_minute ?? -1) || a.title.localeCompare(b.title));
-  const past = sorted.filter((event) => event.event_date < today || (event.event_date === today &&
-    (event.end_minute ?? event.start_minute ?? 1440) < minute));
-  const pastIds = new Set(past.map(({ id }) => id));
-  const upcoming = sorted.filter(({ id }) => !pastIds.has(id));
+  const today = todayInVisitZone();
+  const sorted = [...events].sort((a, b) => a.event_date.localeCompare(b.event_date) || a.title.localeCompare(b.title));
+  const past = [];
+  const upcoming = [];
+  for (const event of sorted) {
+    if ((event.end_date ?? event.event_date) < today) past.push(event);
+    else upcoming.push(event);
+  }
 
   function eventRow(event: OrganizationEvent) {
     return <li key={event.id}>
       <CalendarDays size={18} aria-hidden />
       <div><strong>{event.title}</strong>
         <span><time dateTime={event.event_date}>{journalEntryDateLabel(event.event_date)}</time>
-          {event.start_minute !== null && ` · ${formatVisitTime(event.start_minute)}`}
-          {event.end_minute !== null && ` – ${formatVisitTime(event.end_minute)}`}</span>
+          {event.end_date && event.end_date !== event.event_date &&
+            <>{" – "}<time dateTime={event.end_date}>{journalEntryDateLabel(event.end_date)}</time></>}</span>
         {event.notes && <p className="unit-notes">{event.notes}</p>}
       </div>
       <button type="button" className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => edit(event)}>

@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-import { formatBuildingAddress, type Building, type Unit } from "../lib/directory";
+import { useEffect, useState, type FormEvent } from "react";
+import { formatBuildingAddress, unitNameWithType, type Building, type Unit } from "../lib/directory";
 import { AddressLink } from "./address-link";
 import { formatVisitTime, minuteToTime, timeToMinute, visitLabels, type VisitEvent, type VisitKind } from "../lib/visits";
-import { deleteVisit, saveVisit, scheduleVisit } from "./visit-actions";
+import { deleteVisit, loadUnitDateEvents, saveVisit, scheduleVisit } from "./visit-actions";
 import { Modal } from "./editor";
 
 export type VisitEditorEntry = { unit?: Unit; day: string; event?: VisitEvent; minute?: number };
@@ -14,16 +14,59 @@ export function scheduledMessage(added: number) {
     : "Those saved meetings are already on your calendar, or the unit has no saved meeting times.";
 }
 
-export function VisitEditor({ entry, editable, building, close, done }: {
-  entry: VisitEditorEntry; editable: boolean; building?: Building; close: () => void; done: (day: string, message: string) => void;
+function ExistingUnitEvents({ day, scope, editingId }: { day: string; scope: Unit[]; editingId?: string }) {
+  const [result, setResult] = useState<Awaited<ReturnType<typeof loadUnitDateEvents>> | null>(null);
+  useEffect(() => {
+    let active = true;
+    void loadUnitDateEvents(scope.map(({ id }) => id), day).then(
+      (data) => { if (active) setResult(data); },
+      () => { if (active) setResult({ events: [], error: "Could not load existing events." }); },
+    );
+    return () => { active = false; };
+  }, [day, scope]);
+
+  if (!result) return <p className="field-help" role="status">Checking for existing events…</p>;
+  const events = result.events.filter(({ id }) => id !== editingId);
+  return <>
+    {events.length > 0 && <section aria-label="Existing events on this date">
+      <strong>Existing events on this date</strong>
+      <ul className="management-list unit-event-list">
+        {events.map(({ id, unitId, title, details }) => {
+          const unit = scope.find((item) => item.id === unitId);
+          return <li key={id}>
+            <div><strong>{title}</strong><span>{unit && `${unitNameWithType(unit)} · `}{details}</span></div>
+          </li>;
+        })}
+      </ul>
+    </section>}
+    {result.error && <p className="field-help" role="status">{result.error}</p>}
+  </>;
+}
+
+export function VisitEditor({ entry, editable, building, parentUnit, eventScope, close, done }: {
+  entry: VisitEditorEntry; editable: boolean; building?: Building; parentUnit?: Unit; eventScope?: Unit[];
+  close: () => void; done: (day: string, message: string) => void;
 }) {
   const { event, unit } = entry;
   const isDrive = !unit;
-  const hasTimes = Boolean(unit?.sacrament_meeting_time || unit?.council_meeting_time);
-  const [useMeetings, setUseMeetings] = useState(!event && hasTimes);
+  const councilLabel = unit?.kind === "branch" ? "Branch Council" : "Ward Council";
+  const automaticMeetings = [
+    { label: "Sacrament meeting", time: unit?.sacrament_meeting_time },
+    { label: councilLabel, time: unit?.council_meeting_time },
+  ].filter(({ time }) => Boolean(time));
+  const stake = unit?.kind === "stake" ? unit : parentUnit?.kind === "stake" ? parentUnit : undefined;
+  const meetingTimes = [
+    ...automaticMeetings,
+    { label: "First meeting", time: unit?.first_meeting_time },
+    { label: "T&FH Coordinating Council", time: unit?.tfh_coordinating_council_time },
+    { label: stake && stake !== unit ? `${unitNameWithType(stake)} Council` : "Stake Council", time: stake?.stake_council_time },
+  ].flatMap(({ label, time }) => time ? [{ label, time: timeToMinute(time) }] : [])
+    .sort((a, b) => a.time - b.time);
+  const [useMeetings, setUseMeetings] = useState(!event && automaticMeetings.length > 0);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState("");
+  const [day, setDay] = useState(entry.day);
   const initialStart = event?.start_minute ?? entry.minute
     ?? timeToMinute(unit?.sacrament_meeting_time ?? unit?.council_meeting_time ?? "09:00");
   const initialEnd = event?.end_minute ?? initialStart + (isDrive ? 30 : 60);
@@ -32,12 +75,12 @@ export function VisitEditor({ entry, editable, building, close, done }: {
     eventSubmit.preventDefault();
     if (busy || !editable) return;
     const data = new FormData(eventSubmit.currentTarget);
-    const day = String(data.get("date"));
+    const notes = String(data.get("notes") ?? "").trim() || null;
     setBusy(true);
     setError("");
     try {
       if (useMeetings && unit) {
-        const response = await scheduleVisit(unit.id, day);
+        const response = await scheduleVisit(unit.id, day, notes);
         if (response.error) setError(response.error);
         else done(day, scheduledMessage(response.added));
         return;
@@ -46,6 +89,7 @@ export function VisitEditor({ entry, editable, building, close, done }: {
         id: event?.id ?? null, unit_id: unit?.id ?? null, event_date: day,
         kind: isDrive ? "drive" : event?.kind ?? String(data.get("kind")) as VisitKind,
         title: isDrive ? String(data.get("title") ?? "").trim() || null : null,
+        ...(notes || event?.notes ? { notes } : {}),
         start_minute: timeToMinute(String(data.get("start"))),
         end_minute: timeToMinute(String(data.get("end"))) + (data.has("next_day") ? 1440 : 0),
       });
@@ -80,13 +124,24 @@ export function VisitEditor({ entry, editable, building, close, done }: {
       {isDrive && <label>Trip label <span className="optional">optional</span>
         <input name="title" maxLength={150} defaultValue={event?.title ?? ""} disabled={!editable || busy} />
       </label>}
-      <label>Date<input type="date" name="date" required defaultValue={entry.day} disabled={!editable || busy} /></label>
-      {!event && hasTimes && <label className="check"><input type="checkbox" checked={useMeetings} disabled={busy}
-        onChange={(e) => setUseMeetings(e.target.checked)} />Use saved meeting times</label>}
-      {useMeetings ? <ul className="field-help">
-        {unit?.sacrament_meeting_time && <li>Sacrament meeting at {formatVisitTime(timeToMinute(unit.sacrament_meeting_time))} · 1 hour</li>}
-        {unit?.council_meeting_time && <li>Ward / branch council at {formatVisitTime(timeToMinute(unit.council_meeting_time))} · 1 hour</li>}
-      </ul> : <>
+      <label>Date<input type="date" name="date" required value={day} disabled={!editable || busy}
+        onChange={(event) => setDay(event.target.value)} /></label>
+      {eventScope && editable && day && <ExistingUnitEvents key={day} day={day} scope={eventScope} editingId={event?.id} />}
+      {meetingTimes.length > 0 && <section className="visit-meeting-times" aria-label="Saved meeting times">
+        <strong>Saved meeting times</strong>
+        <ul>
+          {meetingTimes.map(({ label, time }) => <li key={label}>
+            <span>{label}</span><time dateTime={minuteToTime(time)}>{formatVisitTime(time)}</time>
+          </li>)}
+        </ul>
+      </section>}
+      {!event && automaticMeetings.length > 0 && <label className="check">
+        <input type="checkbox" checked={useMeetings} disabled={busy} onChange={(e) => setUseMeetings(e.target.checked)} />
+        <span>Use saved times for {automaticMeetings.map(({ label }) => label).join(" and ")}
+          <span className="optional"> ({automaticMeetings.length > 1 ? "1 hour each" : "1 hour"})</span>
+        </span>
+      </label>}
+      {!useMeetings && <>
         {!event && !isDrive && <label>Event type<select name="kind" defaultValue="visit">
           {Object.entries(visitLabels).filter(([value]) => value !== "drive").map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>}
@@ -96,6 +151,9 @@ export function VisitEditor({ entry, editable, building, close, done }: {
         </div>
         <label className="check"><input type="checkbox" name="next_day" defaultChecked={initialEnd >= 1440} disabled={!editable || busy} />Ends the next day</label>
       </>}
+      {!isDrive && (editable || event?.notes) && <label>Notes <span className="optional">optional</span>
+        <textarea name="notes" rows={3} maxLength={4000} defaultValue={event?.notes ?? ""} readOnly={!editable} disabled={busy} />
+      </label>}
       {error && <p className="notice error" role="alert">{error}</p>}
       <div className="form-actions">
         {event && editable && <button type="button" className="button text-danger push" disabled={busy}

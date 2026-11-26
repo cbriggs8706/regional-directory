@@ -1,4 +1,5 @@
 import type { Contact, Unit, UnitKind } from "./directory";
+import type { SocialLink } from "./social-links";
 import type { UnitJournalData } from "./unit-journal";
 
 export const agentKinds = ["region", "council", "stake"] as const;
@@ -25,6 +26,7 @@ export type DirectoryOrganization = {
   agent_kind: AgentKind;
   building_id: string | null;
   website_url: string | null;
+  social_links?: SocialLink[];
   notes: string | null;
 };
 
@@ -35,8 +37,7 @@ export type OrganizationEvent = {
   organization_id: string;
   title: string;
   event_date: string;
-  start_minute: number | null;
-  end_minute: number | null;
+  end_date: string | null;
   notes: string | null;
 };
 export type OrganizationDirectory = {

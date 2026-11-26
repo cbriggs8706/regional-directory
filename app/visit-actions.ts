@@ -3,11 +3,12 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { getViewer } from "../lib/supabase";
-import { offsetDate, type VisitEvent } from "../lib/visits";
+import { formatVisitTime, offsetDate, visitLabels, type UnitDateEvent, type VisitEvent } from "../lib/visits";
 
 const uuid = z.uuid();
 const date = z.iso.date();
 const accessError = "You need approved directory access.";
+const visitNotes = z.string().trim().max(4000).nullable().optional();
 
 export async function loadVisitEvents(from: string, until: string, includeTeam: boolean): Promise<{ events: VisitEvent[]; error: string | null }> {
   const viewer = await getViewer();
@@ -18,7 +19,7 @@ export async function loadVisitEvents(from: string, until: string, includeTeam: 
   const events: VisitEvent[] = [];
   for (let start = 0; ; start += 500) {
     const query = viewer.client.from("visit_events")
-      .select("id,owner_id,owner_email,unit_id,title,event_date,kind,start_minute,end_minute")
+      .select("*")
       .gte("event_date", offsetDate(from, -1)).lt("event_date", until)
       .order("event_date").order("id").range(start, start + 499);
     if (!includeTeam) query.eq("owner_id", viewer.user.id);
@@ -29,13 +30,54 @@ export async function loadVisitEvents(from: string, until: string, includeTeam: 
   }
 }
 
-export async function scheduleVisit(unitId: string, day: string) {
+export async function loadUnitDateEvents(unitIds: string[], day: string): Promise<{ events: UnitDateEvent[]; error: string | null }> {
+  const viewer = await getViewer();
+  if (!viewer?.role) return { events: [], error: accessError };
+  if (!z.array(uuid).min(1).max(4).safeParse(unitIds).success || !date.safeParse(day).success || day < "0001-01-01") {
+    return { events: [], error: "Choose a valid date." };
+  }
+
+  const visitQuery = viewer.client.from("visit_events").select("id,unit_id,kind,event_date,start_minute,end_minute")
+    .in("unit_id", unitIds)
+    .order("event_date").order("start_minute").order("id");
+  if (day === "0001-01-01") visitQuery.eq("event_date", day);
+  else visitQuery.or(`event_date.eq.${day},and(event_date.eq.${offsetDate(day, -1)},end_minute.gt.1440)`);
+
+  const [stakes, wards, visits] = await Promise.all([
+    viewer.client.from("stake_conferences").select("id,stake_id")
+      .in("stake_id", unitIds).lte("begins_on", day).gte("ends_on", day).order("id"),
+    viewer.client.from("ward_conferences").select("id,unit_id")
+      .in("unit_id", unitIds).lte("begins_on", day).gte("ends_on", day).order("id"),
+    visitQuery,
+  ]);
+  return {
+    events: [
+      ...(stakes.data ?? []).map((row) => ({ id: row.id, unitId: row.stake_id, title: "Stake Conference", details: "All day" })),
+      ...(wards.data ?? []).map((row) => ({ id: row.id, unitId: row.unit_id, title: "Conference", details: "All day" })),
+      ...(visits.data ?? []).map((row) => ({
+        id: row.id,
+        unitId: row.unit_id,
+        title: visitLabels[row.kind as VisitEvent["kind"]],
+        details: row.event_date === day
+          ? `${formatVisitTime(row.start_minute)} – ${formatVisitTime(row.end_minute)}${row.end_minute >= 1440 ? " next day" : ""}`
+          : `Ends at ${formatVisitTime(row.end_minute)} · Started the previous day`,
+      })),
+    ],
+    error: stakes.error || wards.error || visits.error ? "Some existing events could not be loaded." : null,
+  };
+}
+
+export async function scheduleVisit(unitId: string, day: string, notes?: string | null) {
   const viewer = await getViewer();
   if (!viewer?.role) return { error: accessError, added: 0 };
   if (!uuid.safeParse(unitId).success || !date.safeParse(day).success) {
     return { error: "Choose a unit and a valid date.", added: 0 };
   }
-  const { data, error } = await viewer.client.rpc("schedule_unit_visit", { visit_unit: unitId, visit_date: day });
+  const parsedNotes = visitNotes.safeParse(notes);
+  if (!parsedNotes.success) return { error: "Visit notes must be 4,000 characters or fewer.", added: 0 };
+  const { data, error } = await viewer.client.rpc("schedule_unit_visit", {
+    visit_unit: unitId, visit_date: day, ...(parsedNotes.data ? { visit_notes: parsedNotes.data } : {}),
+  });
   if (!error && Number(data) > 0) revalidatePath(`/units/${unitId.toLowerCase()}`);
   return { error: error ? "Could not schedule the unit’s meetings." : null, added: error ? 0 : Number(data) };
 }
@@ -45,6 +87,7 @@ const visitSchema = z.object({
   unit_id: uuid.nullable(),
   kind: z.enum(["sacrament", "council", "visit", "drive"]),
   title: z.string().trim().min(1).max(150).nullable().optional(),
+  notes: visitNotes,
   event_date: date,
   start_minute: z.number().int().min(0).max(1439),
   end_minute: z.number().int(),

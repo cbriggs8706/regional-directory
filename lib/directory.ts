@@ -28,6 +28,8 @@ export type Unit = {
   parent_id: string | null;
   level: CallingLevel;
   website_url: string | null;
+  facebook_urls?: string[];
+  facebook_url?: string | null;
   building_id: string | null;
   language_id: string | null;
   has_sub_congregation: boolean;
@@ -36,8 +38,14 @@ export type Unit = {
   sacrament_meeting_first: boolean | null;
   first_meeting_time: string | null;
   council_meeting_time: string | null;
+  tfh_coordinating_council_time?: string | null;
+  stake_council_time?: string | null;
   notes: string | null;
 };
+
+export function unitFacebookUrls(unit?: Unit): string[] {
+  return unit?.facebook_urls ?? (unit?.facebook_url ? [unit.facebook_url] : []);
+}
 
 export type Conference = { id: string; begins_on: string; ends_on: string };
 export type StakeConference = Conference & { stake_id: string };
@@ -79,7 +87,7 @@ export type Contact = {
 export type Organization = { id: string; name: string; level: CallingLevel; sort_order: number | null };
 export type CallingType = {
   id: string; name: string; level: CallingLevel; sort_order: number | null;
-  organization_id: string; default_multiple_holders: boolean;
+  organization_id: string;
 };
 export type CallingName = { id: number; calling_type_id: string; previous_name: string; changed_at: string };
 export type Position = {
@@ -87,7 +95,6 @@ export type Position = {
   unit_id: string;
   calling_type_id: string;
   level: CallingLevel;
-  multiple_holders: boolean;
   retired_on: string | null;
   successor_id: string | null;
 };
@@ -181,4 +188,8 @@ export function unitPath(unit: Unit, units: Map<string, Unit>, format: "full" | 
 
 export function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+export function isAdminDirectoryTab(tab: string | null | undefined) {
+  return tab === "callings" || tab === "access";
 }

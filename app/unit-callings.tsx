@@ -14,8 +14,8 @@ import { PersonCard } from "./person-card";
 
 const dateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
-export function UnitCallings({ unit, directory, edit, title }: {
-  unit: Unit; directory: Directory; edit: (state: EditorState) => void; title: string;
+export function UnitCallings({ unit, directory, edit, title, admin }: {
+  unit: Unit; directory: Directory; edit: (state: EditorState) => void; title: string; admin: boolean;
 }) {
   const [managing, setManaging] = useState<string | null>(null);
   const organizations = directory.organizations.filter((organization) => organization.level === unit.level).sort(compareCallingOrder);
@@ -46,7 +46,7 @@ export function UnitCallings({ unit, directory, edit, title }: {
     return contacts.get(assignment.contact_id)?.name ?? "Unknown holder";
   }
 
-  function holderCard(assignment: Assignment, calling: CallingType, position: Position) {
+  function holderCard(assignment: Assignment, calling: CallingType, position: Position, canAddAnother = false) {
     const name = holderName(assignment);
     const callingName = assignment.released_on ? assignment.calling_name : calling.name;
     return <PersonCard className="panel unit-holder-card" key={assignment.id} person={contacts.get(assignment.contact_id)}>
@@ -60,6 +60,8 @@ export function UnitCallings({ unit, directory, edit, title }: {
           {assignment.assignment_labels.map((label) => <span className="chip" key={label}>{label}</span>)}
         </div>}
         <AssignmentBuildings assignment={assignment} buildings={buildings} />
+        {canAddAnother && <button type="button" className="text-button" aria-label={`Add another holder for ${calling.name}`}
+          onClick={() => addHolder(calling, position)}><Plus size={16} aria-hidden />Add another holder</button>}
       </div>
       <button className="icon-button" aria-label={`Edit ${callingName} assignment for ${name}`}
         title={assignment.released_on ? "Edit assignment" : "Edit or release"}
@@ -87,7 +89,7 @@ export function UnitCallings({ unit, directory, edit, title }: {
   return <section className="unit-tab-section" aria-labelledby="unit-callings-heading">
     <UnitSectionHeading id="unit-callings-heading" title={title} unit={unit} />
     {groups.length === 0 ? <div className="panel empty"><h3>No callings yet</h3>
-      <RouteLink href="/?tab=callings">Manage organizations and callings</RouteLink>
+      {admin && <RouteLink href="/?tab=callings">Manage organizations and callings</RouteLink>}
     </div> : <div className="calling-list unit-callings-list">
       {groups.map(({ key, name, organization, template }) => {
         const roles = callings.filter((calling) => calling.organization_id === organization?.id).map((calling) => {
@@ -96,9 +98,11 @@ export function UnitCallings({ unit, directory, edit, title }: {
           const current = holders.filter((assignment) => !assignment.released_on)
             .sort((a, b) => holderName(a).localeCompare(holderName(b)));
           const cards = position && current.length > 0
-            ? current.map((assignment) => ({ element: holderCard(assignment, calling, position), vacancy: false }))
+            ? current.map((assignment, index) => ({
+              element: holderCard(assignment, calling, position, index === 0 && !position.retired_on), vacancy: false,
+            }))
             : [vacantCard(calling.id, calling.name, () => addHolder(calling, position), Boolean(position?.retired_on))];
-          return { calling, position, current, holders, cards };
+          return { calling, position, holders, cards };
         });
         const past = roles.flatMap(({ calling, position, holders }) => position
           ? holders.filter((assignment) => assignment.released_on).map((assignment) => ({ calling, position, assignment })) : [])
@@ -119,8 +123,7 @@ export function UnitCallings({ unit, directory, edit, title }: {
             : /coun[sc]ell?or/i.test(calling.name)));
           const sharedRoles = new Set(shared);
           const unassignedCards = shared.flatMap((role) => role.cards);
-          const multiHolder = template === "high-council" ? shared.find(({ calling, position }) =>
-            position?.multiple_holders ?? calling.default_multiple_holders) : undefined;
+          const sharedCouncilRole = template === "high-council" ? shared[0] : undefined;
 
           cards = standard.roles.flatMap((title, index) => {
             const configured = numbered.get(index);
@@ -128,7 +131,7 @@ export function UnitCallings({ unit, directory, edit, title }: {
             const sharedCard = unassignedCards.shift();
             if (sharedCard) return [sharedCard];
             return [vacantCard(`${template}-${index}`, title, () => {
-              if (multiHolder) addHolder(multiHolder.calling, multiHolder.position);
+              if (sharedCouncilRole) addHolder(sharedCouncilRole.calling, sharedCouncilRole.position);
               else edit({ resource: "assignments", unit, standardRole: { group: template, index } });
             })];
           });
@@ -171,8 +174,8 @@ export function UnitCallings({ unit, directory, edit, title }: {
                   onClick={() => openEditor({ resource: "calling_types", organization })}>Add calling</button>}
               </div>
               {roles.length > 0 && <ul className="management-list unit-calling-roles">
-                {roles.map(({ calling, position, current }) => {
-                  const addPast = Boolean(position?.retired_on || (current.length && !position?.multiple_holders));
+                {roles.map(({ calling, position }) => {
+                  const addPast = Boolean(position?.retired_on);
                   return <li key={calling.id}>
                     <div><strong>{calling.name}</strong>
                       {position?.retired_on && <small>Retired {dateFormat.format(new Date(position.retired_on))}</small>}

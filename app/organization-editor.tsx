@@ -1,14 +1,16 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
+import { Plus, X } from "lucide-react";
 import { useRouteNavigation } from "./route-navigation";
 import { formatBuildingAddress, unitPath, type Directory } from "../lib/directory";
 import {
   agentLabel, isOrganizationAgent, type DirectoryOrganization, type OrganizationAssignment,
   type OrganizationEvent, type OrganizationTitle,
 } from "../lib/organizations";
+import { socialChannels, type SocialLink } from "../lib/social-links";
 import { journalNotesMaxLength } from "../lib/unit-journal";
-import { minuteToTime, timeToMinute, todayInVisitZone } from "../lib/visits";
+import { todayInVisitZone } from "../lib/visits";
 import { ContactFields, HomeWardField, Modal } from "./editor";
 import { removeOrganizationRecord, saveOrganizationRecord } from "./organization-actions";
 
@@ -26,6 +28,35 @@ const resourceLabels = {
   assignment_status: "assignment",
   organization_events: "event",
 };
+
+function SocialLinkFields({ links = [], busy }: { links?: SocialLink[]; busy: boolean }) {
+  const [fields, setFields] = useState(() => links.map((link, id) => ({ id, channel: link.channel as string, url: link.url })));
+  const nextId = useRef(fields.length);
+
+  return <fieldset>
+    <legend>Social media <span className="optional">optional</span></legend>
+    {fields.map(({ id, channel, url }, index) => <div className="organization-social-link stack" key={id}>
+      <label>Channel
+        <select name="social_channel" defaultValue={channel} required>
+          <option value="" disabled>Choose a channel</option>
+          {Object.entries(socialChannels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </label>
+      <label>URL
+        <input name="social_url" type="url" autoCapitalize="none" placeholder="https://" maxLength={2048}
+          defaultValue={url} required />
+      </label>
+      <button type="button" className="text-button" disabled={busy} aria-label={`Remove social link ${index + 1}`}
+        onClick={() => setFields((current) => current.filter((field) => field.id !== id))}>
+        <X size={16} aria-hidden /> Remove link
+      </button>
+    </div>)}
+    <button type="button" className="text-button" disabled={busy} onClick={() => {
+      const id = nextId.current++;
+      setFields((current) => [...current, { id, channel: "", url: "" }]);
+    }}><Plus size={16} aria-hidden /> Add social link</button>
+  </fieldset>;
+}
 
 export function OrganizationEditor({ state, directory, close }: {
   state: OrganizationEditorState; directory: Directory; close: () => void;
@@ -69,14 +100,18 @@ export function OrganizationEditor({ state, directory, close }: {
       } else {
         let input;
         switch (resource) {
-          case "directory_organizations":
+          case "directory_organizations": {
+            const urls = form.getAll("social_url");
+            const socialLinks = form.getAll("social_channel").map((channel, index) => ({ channel, url: urls[index] }));
             input = { resource, id: state.row?.id, values: {
               name: form.get("name"), type: form.get("type"), agent_id: form.get("agent_id"),
               agent_kind: agents.find(({ id }) => id === form.get("agent_id"))?.kind,
               building_id: form.get("building_id") || null,
               website_url: String(form.get("website_url")).trim(), notes: form.get("notes"),
+              ...(socialLinks.length || org?.social_links?.length ? { social_links: socialLinks } : {}),
             } };
             break;
+          }
           case "organization_titles":
             input = { resource, id: state.row?.id, organizationId: state.organizationId, values: { name: form.get("name") } };
             break;
@@ -93,16 +128,12 @@ export function OrganizationEditor({ state, directory, close }: {
             input = { resource, organizationId: state.organizationId, id: state.row.id,
               titleId: state.row.title_id, active: form.has("active") };
             break;
-          case "organization_events": {
-            const start = form.get("start_time");
-            const end = form.get("end_time");
+          case "organization_events":
             input = { resource, id: state.row?.id, organizationId: state.organizationId, values: {
               title: form.get("title"), event_date: form.get("event_date"), notes: form.get("notes"),
-              start_minute: start ? timeToMinute(String(start)) : null,
-              end_minute: end ? timeToMinute(String(end)) : null,
+              end_date: form.get("end_date") || null,
             } };
             break;
-          }
         }
         const result = await saveOrganizationRecord(input);
         if (result.error) { setError(result.error); return; }
@@ -142,6 +173,7 @@ export function OrganizationEditor({ state, directory, close }: {
           <label>Website <span className="optional">optional</span>
             <input name="website_url" type="url" maxLength={2048} defaultValue={org?.website_url ?? ""} />
           </label>
+          <SocialLinkFields links={org?.social_links} busy={busy} />
           <label>Notes <span className="optional">optional</span>
             <textarea name="notes" rows={4} maxLength={journalNotesMaxLength} defaultValue={org?.notes ?? ""} />
           </label>
@@ -168,13 +200,10 @@ export function OrganizationEditor({ state, directory, close }: {
         </label>}
         {resource === "organization_events" && <>
           <label>Title<input name="title" maxLength={150} defaultValue={event?.title} required /></label>
-          <label>Date<input name="event_date" type="date" min="0001-01-01" max="9999-12-31"
+          <label>Start date<input name="event_date" type="date" min="0001-01-01" max="9999-12-31"
             defaultValue={event?.event_date ?? todayInVisitZone()} required /></label>
-          <label>Start time <span className="optional">optional</span>
-            <input name="start_time" type="time" defaultValue={event?.start_minute == null ? "" : minuteToTime(event.start_minute)} />
-          </label>
-          <label>End time <span className="optional">optional</span>
-            <input name="end_time" type="time" defaultValue={event?.end_minute == null ? "" : minuteToTime(event.end_minute)} />
+          <label>End date <span className="optional">optional</span>
+            <input name="end_date" type="date" min="0001-01-01" max="9999-12-31" defaultValue={event?.end_date ?? ""} />
           </label>
           <label>Notes <span className="optional">optional</span>
             <textarea name="notes" rows={4} maxLength={journalNotesMaxLength} defaultValue={event?.notes ?? ""} />
