@@ -27,7 +27,7 @@ A private, mobile-first directory for people serving in Church callings. The uni
 ## Directory workflow
 
 - In **Units**, coordinating councils open to show their stakes. Expand a stake to see its wards and branches. When multiple regions exist, use the region selector above the tree. A branch shares the ward-level calling types.
-- Use **Add units** on a stake to enter several wards and branches together. Type or paste one name per line in the corresponding field. Existing units and repeated names of the same type are skipped.
+- From **Units**, open the parent unit’s page and click the pencil next to its name. A region has **Add coordinating councils**, a coordinating council has **Add stakes**, and a stake has **Add wards and branches**. Type or paste one name per line. Existing units and repeated names of the same type are skipped.
 - In **Units → Languages**, add or rename a language for use across regions. Edit a ward or branch to choose its language, record its local sacrament meeting time and whether sacrament meeting comes first, and add optional notes.
 - In a ward or branch, choose **No** for **Is sacrament meeting first?** to enter the first meeting’s start time. You can also enter a council start time.
 - On a stake, ward, or branch page, choose **Add conference** to record begin and end dates. Stake dates also appear on that stake’s ward and branch pages. Ward and branch dates appear on their own unit pages.

@@ -7,7 +7,7 @@ import type { Contact } from "../lib/directory";
 import { saveContactDetails } from "./actions";
 import { Modal } from "./editor";
 
-type CardContact = Pick<Contact, "id" | "name" | "phone" | "email" | "is_whatsapp">;
+type CardContact = Pick<Contact, "id" | "name" | "phone" | "email">;
 
 export function PersonCard({ as: Element = "li", className, person, children }: {
   as?: "li" | "div";
@@ -39,8 +39,8 @@ function ContactMenu({ person, close }: { person: CardContact; close: () => void
   const phoneExtension = extension && /^\d+$/.test(extension) ? `;ext=${extension}` : "";
   const email = person.email?.trim();
   const digits = phone?.replace(/^\+/, "") ?? "";
-  const whatsapp = person.is_whatsapp && (phone?.startsWith("+") ? digits : digits.length === 10 ? `1${digits}` : digits);
-  const whatsappHref = whatsapp && /^[1-9]\d{7,14}$/.test(whatsapp) ? `https://wa.me/${whatsapp}` : null;
+  const whatsappNumber = phone?.startsWith("+") ? digits : digits.length === 10 ? `1${digits}` : digits;
+  const whatsappHref = /^[1-9]\d{7,14}$/.test(whatsappNumber) ? `whatsapp://send?phone=${whatsappNumber}` : null;
 
   async function copyEmail() {
     if (!email) return;
@@ -95,10 +95,10 @@ function ContactMenu({ person, close }: { person: CardContact; close: () => void
     </form> : <div className="modal-body stack">
       {(phone || email) ? <div className="contact-menu-actions">
         {phone && <a className="button" href={`tel:${phone}${phoneExtension}`}><Phone size={18} aria-hidden />Call</a>}
-        {phone && <a className="button" href={whatsappHref ?? `sms:${phone}`}
-          target={whatsappHref ? "_blank" : undefined} rel={whatsappHref ? "noopener noreferrer" : undefined}>
-          <MessageCircle size={18} aria-hidden />{whatsappHref ? "Message on WhatsApp" : "Message"}
-        </a>}
+        {phone && <div className="contact-menu-messaging">
+          <a className="button" href={`sms:${phone}`}><MessageCircle size={18} aria-hidden />Message</a>
+          {whatsappHref && <a className="button" href={whatsappHref}>Message via WhatsApp</a>}
+        </div>}
         {email && <button type="button" className="button" onClick={copyEmail}>
           <Copy size={18} aria-hidden />Copy email address
         </button>}

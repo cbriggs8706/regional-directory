@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { buildingPhotoMaxBytes, buildingPhotoTypes, callingLevels, normalizeEmail } from "../lib/directory";
+import { buildingPhotoMaxBytes, buildingPhotoTypes, callingLevels, childUnitEntry, normalizeEmail, unitLabels, type Building } from "../lib/directory";
 import { focusTypes } from "../lib/focus-people";
 import { languageColors } from "../lib/language-colors";
 import { createDirectoryClient, getViewer } from "../lib/supabase";
@@ -231,7 +231,8 @@ export async function saveBuilding(id: string | null, form: FormData) {
     if (previousPhoto) update.eq("photo_path", previousPhoto);
     else update.is("photo_path", null);
   }
-  const { data, error } = await (update ?? table.insert({ ...values, id: buildingId })).select("id").maybeSingle();
+  const { data, error } = await (update ?? table.insert({ ...values, id: buildingId }))
+    .select("id,address,city,state,zip_code,agent_stake_id,photo_path").maybeSingle<Building>();
   if (error || !data) {
     if (photoPath) await photos.remove([photoPath]);
     if (!error) return { error: "This building changed while you were editing it. Reopen it and try again." };
@@ -240,7 +241,9 @@ export async function saveBuilding(id: string | null, form: FormData) {
   }
   if (previousPhoto) await photos.remove([previousPhoto]);
   revalidateDirectory();
-  return { error: null };
+  revalidatePath("/organizations");
+  revalidatePath("/organizations/[id]", "page");
+  return { error: null, building: data };
 }
 
 const newHolderSchema = z.object({
@@ -340,35 +343,34 @@ export async function saveCallingOrder(organizationId: string, ids: string[]) {
   return { error: null };
 }
 
-const stakeUnitsSchema = z.object({
-  stakeId: uuid,
-  units: z.array(z.object({ name, kind: z.enum(["ward", "branch"]) })).min(1),
-});
-
-export async function addStakeUnits(stakeId: string, form: FormData) {
+export async function addChildUnits(parentId: string, parentKind: keyof typeof childUnitEntry, form: FormData) {
   const viewer = await getViewer();
   if (!viewer?.role) return { error: "You need approved directory access." };
+  if (!uuid.safeParse(parentId).success || !Object.hasOwn(childUnitEntry, parentKind)) {
+    return { error: "Choose a valid parent unit." };
+  }
 
-  const lists = [["wards", "ward"], ["branches", "branch"]] as const;
-  const requested = lists.flatMap(([field, kind]) =>
-    String(form.get(field) ?? "").split(/\r\n|\n|\r/)
+  const { fields, plural, emptyMessage } = childUnitEntry[parentKind];
+  const parentLabel = unitLabels[parentKind].toLowerCase();
+  const requested = fields.flatMap(({ kind }) =>
+    String(form.get(kind) ?? "").split(/\r\n|\n|\r/)
       .map((line) => line.trim())
       .filter(Boolean)
       .map((name) => ({ name, kind })),
   );
-  if (requested.length === 0) return { error: "Enter at least one ward or branch name." };
-  const parsed = stakeUnitsSchema.safeParse({ stakeId, units: requested });
-  if (!parsed.success) return { error: "Check the selected stake and keep each unit name to 150 characters." };
+  if (requested.length === 0) return { error: emptyMessage };
+  if (requested.some((unit) => !name.safeParse(unit.name).success)) {
+    return { error: "Keep each name to 150 characters." };
+  }
 
-  const parentId = parsed.data.stakeId;
   const table = viewer.client.from("units");
   const { data: existing, error: lookupError } = await table.select("name,kind").eq("parent_id", parentId);
-  if (lookupError) return { error: "Could not check the stake’s existing units. Please try again." };
+  if (lookupError) return { error: `Could not check the ${parentLabel}’s existing ${plural}. Please try again.` };
 
   const unitKey = (unit: { name: string; kind: string }) => `${unit.kind}:${unit.name.trim().toLowerCase()}`;
   const names = new Set(existing.map(unitKey));
   const pending = [];
-  for (const unit of parsed.data.units) {
+  for (const unit of requested) {
     const key = unitKey(unit);
     if (names.has(key)) continue;
     names.add(key);
@@ -377,7 +379,7 @@ export async function addStakeUnits(stakeId: string, form: FormData) {
 
   if (pending.length > 0) {
     const { error } = await table.insert(pending);
-    if (error?.code === "23503") return { error: "This stake is no longer available. Reload and choose a stake." };
+    if (error?.code === "23503") return { error: `This ${parentLabel} is no longer available. Reload and choose a ${parentLabel}.` };
     if (error?.code === "23505") return { error: "A unit name already exists. Check your list and try again." };
     if (error) return { error: databaseError(error) };
   }

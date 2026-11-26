@@ -17,6 +17,33 @@ export const parentKinds = {
   branch: "stake",
 } as const;
 
+export const childUnitEntry = {
+  region: {
+    heading: "Add coordinating councils",
+    button: "Add coordinating councils",
+    singular: "coordinating council",
+    plural: "coordinating councils",
+    emptyMessage: "Enter at least one coordinating council name.",
+    fields: [{ label: "Coordinating councils", kind: "council" }],
+  },
+  council: {
+    heading: "Add stakes",
+    button: "Add stakes",
+    singular: "stake",
+    plural: "stakes",
+    emptyMessage: "Enter at least one stake name.",
+    fields: [{ label: "Stakes", kind: "stake" }],
+  },
+  stake: {
+    heading: "Add wards and branches",
+    button: "Add units",
+    singular: "unit",
+    plural: "units",
+    emptyMessage: "Enter at least one ward or branch name.",
+    fields: [{ label: "Wards", kind: "ward" }, { label: "Branches", kind: "branch" }],
+  },
+} as const;
+
 export const callingLevels = ["region", "council", "stake", "ward"] as const;
 export type UnitKind = keyof typeof unitLabels;
 export type CallingLevel = typeof callingLevels[number];
@@ -59,6 +86,18 @@ export type Building = {
   agent_stake_id: string | null;
   photo_path: string | null;
 };
+
+export function groupBuildingsByCity(buildings: readonly Building[]) {
+  const groups = new Map<string, { city: string; buildings: Building[] }>();
+  for (const building of [...buildings].sort((a, b) => a.address.localeCompare(b.address))) {
+    const city = building.city?.trim() ?? "";
+    const key = city.toLowerCase();
+    const group = groups.get(key) ?? { city, buildings: [] };
+    group.buildings.push(building);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => Number(!a.city) - Number(!b.city) || a.city.localeCompare(b.city));
+}
 
 export function formatBuildingAddress(building: Building) {
   const stateAndZip = [building.state, building.zip_code].filter(Boolean).join(" ");

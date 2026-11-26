@@ -8,6 +8,7 @@ import {
 } from "../lib/directory";
 import { AssignmentBuildings } from "./assignment-buildings";
 import { Modal, type EditorState } from "./editor";
+import { EmailAllButton } from "./email-all-button";
 import { standardCallingGroups, standardGroupFor, standardGroupsForUnit, standardRoleIndex, type StandardCallingGroup } from "../lib/standard-callings";
 import { UnitSectionHeading } from "./unit-section-heading";
 import { PersonCard } from "./person-card";
@@ -102,8 +103,9 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
               element: holderCard(assignment, calling, position, index === 0 && !position.retired_on), vacancy: false,
             }))
             : [vacantCard(calling.id, calling.name, () => addHolder(calling, position), Boolean(position?.retired_on))];
-          return { calling, position, holders, cards };
+          return { calling, position, holders, current, cards };
         });
+        const emails = roles.flatMap(({ current }) => current.map(({ contact_id }) => contacts.get(contact_id)?.email));
         const past = roles.flatMap(({ calling, position, holders }) => position
           ? holders.filter((assignment) => assignment.released_on).map((assignment) => ({ calling, position, assignment })) : [])
           .sort((a, b) => (b.assignment.released_on ?? "").localeCompare(a.assignment.released_on ?? ""));
@@ -151,8 +153,11 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
         return <section className="unit-calling" key={key} aria-labelledby={`unit-organization-${key}`}>
           <div className="unit-calling-heading">
             <h3 id={`unit-organization-${key}`}>{name}</h3>
-            <button type="button" className="icon-button" aria-label={`Edit ${name}`} title={`Edit ${name}`}
-              onClick={() => setManaging(key)}><Pencil size={16} aria-hidden /></button>
+            <div className="toolbar">
+              <EmailAllButton group={name} emails={emails} />
+              <button type="button" className="icon-button" aria-label={`Edit ${name}`} title={`Edit ${name}`}
+                onClick={() => setManaging(key)}><Pencil size={16} aria-hidden /></button>
+            </div>
           </div>
           {cards.length ? <ul className="unit-holder-grid" aria-label={`${name} calling holders and vacancies`}>
             {cards.map(({ element }) => element)}

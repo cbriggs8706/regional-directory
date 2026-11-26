@@ -1,6 +1,6 @@
 import Image from "next/image";
 import { Building2, Languages, Pencil } from "lucide-react";
-import { buildingPhotoUrl, formatBuildingAddress, unitPath, type Building, type Directory } from "../lib/directory";
+import { buildingPhotoUrl, formatBuildingAddress, groupBuildingsByCity, unitPath, type Directory } from "../lib/directory";
 import { AddressLink } from "./address-link";
 import { AddMenu } from "./add-menu";
 import type { EditorState } from "./editor";
@@ -12,17 +12,7 @@ type ManagementProps = { directory: Directory; edit: (state: EditorState) => voi
 
 export function BuildingsView({ directory, edit, addHost }: ManagementProps & { addHost: HTMLElement | null }) {
   const unitsById = new Map(directory.units.map((unit) => [unit.id, unit]));
-  const buildings = [...directory.buildings].sort((a, b) => a.address.localeCompare(b.address));
-  const cityGroups = new Map<string, { city: string; buildings: Building[] }>();
-  for (const building of buildings) {
-    const city = building.city?.trim() ?? "";
-    const key = city.toLowerCase();
-    const group = cityGroups.get(key) ?? { city, buildings: [] };
-    group.buildings.push(building);
-    cityGroups.set(key, group);
-  }
-  const groups = [...cityGroups].sort(([, a], [, b]) =>
-    Number(!a.city) - Number(!b.city) || a.city.localeCompare(b.city));
+  const groups = groupBuildingsByCity(directory.buildings);
 
   return (
     <section className="buildings-view" aria-labelledby="buildings-heading">
@@ -30,8 +20,8 @@ export function BuildingsView({ directory, edit, addHost }: ManagementProps & { 
         <h1 id="buildings-heading">Buildings</h1>
       </div>
       {groups.length ? <div className="building-city-groups">
-        {groups.map(([key, group]) => (
-          <div key={key}>
+        {groups.map((group) => (
+          <div key={group.city}>
             <h2>{group.city || "City not set"}</h2>
             <ul className="panel management-list">
               {group.buildings.map((building) => {

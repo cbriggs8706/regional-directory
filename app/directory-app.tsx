@@ -92,12 +92,8 @@ const callingFilterLevels = [
   { level: "region", label: "Regions" },
 ] as const;
 
-function PeopleFilterMenu({ name, emptyLabel, heading, count, Icon, onClear, children }: {
-  name: string;
-  emptyLabel: string;
-  heading: string;
+function CallingFilterMenu({ count, onClear, children }: {
   count: number;
-  Icon: typeof Filter;
   onClear: () => void;
   children: ReactNode;
 }) {
@@ -122,12 +118,12 @@ function PeopleFilterMenu({ name, emptyLabel, heading, count, Icon, onClear, chi
       toggle.current?.focus({ preventScroll: true });
     }
   }}>
-    <summary ref={toggle} className="button"><Icon size={16} aria-hidden />
-      {count ? `${name} (${count})` : emptyLabel}
+    <summary ref={toggle} className="button"><Filter size={16} aria-hidden />
+      {count ? `Callings & assignments (${count})` : "All callings & assignments"}
       <ChevronDown size={15} aria-hidden />
     </summary>
     <div className="filter-menu">
-      <div className="filter-menu-heading"><strong>{heading}</strong>
+      <div className="filter-menu-heading"><strong>Callings & assignments</strong>
         {count > 0 && <button className="text-button" onClick={onClear}>Clear</button>}
       </div>
       <div className="filter-menu-options">{children}</div>
@@ -229,13 +225,12 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
         && (!tagFilter.length || assignment.assignment_labels.some((label) => tagFilter.includes(label)));
     });
   });
-  const selectedPeople = sortedPeople.filter((person): person is Contact & { email: string } =>
-    selected.has(person.id) && Boolean(person.email),
-  );
-  const addresses = [...new Set(selectedPeople.map((person) => normalizeEmail(person.email)))];
+  const selectedPeople = sortedPeople.filter((person) => selected.has(person.id));
+  const emailRecipients = selectedPeople.filter((person): person is Contact & { email: string } => Boolean(person.email));
+  const addresses = [...new Set(emailRecipients.map((person) => normalizeEmail(person.email)))];
   const recipientCount = addresses.length;
   const addressList = addresses.join(", ");
-  const emailable = visible.filter((person) => person.email);
+  const allVisibleSelected = visible.every((person) => selected.has(person.id));
   const pendingMail = pending.filter((entry) => !dismissed.includes(entry.id));
 
   function tabHref(next: Tab) {
@@ -337,8 +332,13 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
                 <option value="person_of_interest">Persons of Interest</option>
                 <option value="recent_convert">Recent Converts</option>
               </select>
-              {!focusFilter && <PeopleFilterMenu name="Callings" emptyLabel="All callings" heading="Filter by calling" count={callingFilter.length}
-                Icon={Filter} onClear={() => setCallingFilter([])}>
+              <select aria-label="Filter by unit" value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
+                <PeopleUnitOptions units={units} />
+              </select>
+              {!focusFilter && <CallingFilterMenu count={callingFilter.length + tagFilter.length} onClear={() => {
+                setCallingFilter([]);
+                setTagFilter([]);
+              }}>
                 {sortedTypes.length ? callingFilterLevels.map(({ level, label }) => {
                   const callings = sortedTypes.filter((type) => type.level === level);
                   if (!callings.length) return null;
@@ -353,25 +353,23 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
                     </div>
                   </details>;
                 }) : <p className="muted">No callings yet.</p>}
-              </PeopleFilterMenu>}
-              <select aria-label="Filter by unit" className="unit-filter" value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
-                <PeopleUnitOptions units={units} />
-              </select>
-              {!focusFilter && <PeopleFilterMenu name="Assignment Tags" emptyLabel="All Assignment Tags"
-                heading="Filter by assignment tag" count={tagFilter.length} Icon={Tags}
-                onClear={() => setTagFilter([])}>
-                {sortedTags.length ? sortedTags.map((tag) => <label className="check" key={tag}>
-                  <input type="checkbox" checked={tagFilter.includes(tag)} onChange={(event) =>
-                    setTagFilter((prev) => event.target.checked ? [...prev, tag] : prev.filter((label) => label !== tag))} />
-                  <span>{tag}</span>
-                </label>) : <p className="muted">No assignment tags on current callings.</p>}
-              </PeopleFilterMenu>}
+                <details className="calling-filter-group">
+                  <summary><ChevronDown size={15} aria-hidden />Assignment tags</summary>
+                  <div className="calling-filter-group-options">
+                    {sortedTags.length ? sortedTags.map((tag) => <label className="check" key={tag}>
+                      <input type="checkbox" checked={tagFilter.includes(tag)} onChange={(event) =>
+                        setTagFilter((prev) => event.target.checked ? [...prev, tag] : prev.filter((label) => label !== tag))} />
+                      <span>{tag}</span>
+                    </label>) : <p className="muted">No assignment tags on current callings.</p>}
+                  </div>
+                </details>
+              </CallingFilterMenu>}
             </div>
             <div className="list-heading">
               <span>{visible.length} {visible.length === 1 ? "contact" : "contacts"}</span>
-              {emailable.length > 0 && <button className="text-button" onClick={() =>
-                changeSelected(emailable.map((person) => person.id), !emailable.every((person) => selected.has(person.id)))}>
-                {emailable.every((person) => selected.has(person.id)) ? "Deselect all shown" : "Select all shown with email"}
+              {visible.length > 0 && <button type="button" className="button" onClick={() =>
+                changeSelected(visible.map((person) => person.id), !allVisibleSelected)}>
+                {allVisibleSelected ? "Deselect All" : "Select All"}
               </button>}
             </div>
             {visible.length === 0 ? (
@@ -382,11 +380,10 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
             ) : (
               <ul className="contact-list">
                 {visible.map((person) => (
-                  <PersonCard key={person.id} person={person} className={selected.has(person.id) && person.email ? "selected" : undefined}>
+                  <PersonCard key={person.id} person={person} className={selected.has(person.id) ? "selected" : undefined}>
                     <label className="contact-check">
-                      <input type="checkbox" aria-label={`Select ${person.name} for email`} disabled={!person.email}
-                        title={person.email ? undefined : "This contact has no email address"}
-                        checked={Boolean(person.email && selected.has(person.id))}
+                      <input type="checkbox" aria-label={`Select ${person.name}`}
+                        checked={selected.has(person.id)}
                         onChange={(event) => changeSelected([person.id], event.target.checked)} />
                     </label>
                     <span className="avatar" aria-hidden>{initials(person.name)}</span>
@@ -552,21 +549,21 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
       </div>
 
       <footer className="directory-footer" ref={detailUnit || tab === "dashboard" || tab === "people" || tab === "calendar" || managementSection || organizationsPage ? setAddHost : undefined}>
-        {recipientCount > 0 && <aside className="selection-bar" aria-label="Email selection">
+        {selectedPeople.length > 0 && <aside className="selection-bar" aria-label="Contact selection">
           <div className="shell selection-inner">
             <div className="selection-summary">
-              <strong role="status">{addressList === copiedAddresses
+              <strong role="status">{recipientCount > 0 && addressList === copiedAddresses
                 ? `Copied ${recipientCount} ${recipientCount === 1 ? "address" : "addresses"}`
-                : `${recipientCount} ${recipientCount === 1 ? "recipient" : "recipients"} selected`}</strong>
+                : `${selectedPeople.length} ${selectedPeople.length === 1 ? "contact" : "contacts"} selected`}</strong>
               <button className="text-button" onClick={() => {
                 setSelected(new Set());
                 setCopiedAddresses("");
               }}>Clear selection</button>
             </div>
-            <div className="selection-actions">
+            {recipientCount > 0 && <div className="selection-actions">
               <button className="button primary" onClick={copyAddresses}><Copy size={17} aria-hidden />Copy email addresses</button>
               {mailReady && <button className="button" onClick={() => setCompose(true)}><Mail size={17} aria-hidden />Compose email</button>}
-            </div>
+            </div>}
           </div>
         </aside>}
         <nav className="shell footer-nav" aria-label="Directory sections">
@@ -603,7 +600,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
         </div>
       </Modal>}
       {editor && <Editor state={editor} directory={directory} close={() => setEditor(null)} />}
-      {compose && <Compose contacts={selectedPeople} pending={pendingMail} ready={mailReady} count={recipientCount}
+      {compose && <Compose contacts={emailRecipients} pending={pendingMail} ready={mailReady} count={recipientCount}
         close={(clearSelection) => {
           setCompose(false);
           if (clearSelection) setSelected(new Set());
@@ -695,7 +692,7 @@ function Compose({ contacts, pending, ready, count, close, remove, finish }: {
             </button>
           </div>
         </form> : <>
-          <p>Select people from the directory or filter by calling and select everyone shown with an email address.</p>
+          <p>Select at least one contact with an email address to compose a message.</p>
           {issue && <p className="notice error" role="alert">{issue}</p>}
         </>}
       </div>

@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type ReactNode } from "react";
-import Image from "next/image";
+import { useRef, useState, type ClipboardEvent, type FormEvent } from "react";
 import { Plus, X } from "lucide-react";
 import { focusTypes, focusTypeLabels, type FocusType } from "../lib/focus-people";
-import { addCallingHolder, addStakeUnits, deleteRecord, saveBuilding, saveRecord, saveSchedulerAssignment, type Resource } from "./actions";
+import { addCallingHolder, addChildUnits, deleteRecord, saveBuilding, saveRecord, saveSchedulerAssignment, type Resource } from "./actions";
 import {
-  buildingPhotoMaxBytes, buildingPhotoTypes, buildingPhotoUrl, formatBuildingAddress,
-  callingLevelLabel, callingLevels, callingPath, compareCallingOrder, hasSacramentMeeting, isBuildingScheduler, parentKinds, unitFacebookUrls, unitLabels, unitPath,
+  formatBuildingAddress, groupBuildingsByCity,
+  callingLevelLabel, callingLevels, callingPath, childUnitEntry, compareCallingOrder, hasSacramentMeeting, isBuildingScheduler, parentKinds, unitFacebookUrls, unitLabels, unitPath,
   type Assignment, type Building, type CallingLevel, type CallingType, type Contact, type Directory, type Language, type Organization, type Position,
   type Conference, type Unit, type UnitKind,
 } from "../lib/directory";
 import { languageColor, languageColors, type LanguageColor } from "../lib/language-colors";
 import { standardCallingGroups, type StandardCalling } from "../lib/standard-callings";
+import { BuildingField, BuildingFields, prepareBuildingPhoto } from "./building-fields";
+import { Modal } from "./modal";
+
+export { Modal } from "./modal";
 
 export type EditorState =
   | { resource: "contacts"; row?: Contact; ward?: Unit }
@@ -33,27 +36,6 @@ const labels = {
   stake_conferences: "Stake conference", ward_conferences: "Ward conference",
   positions: "Calling in unit", assignments: "Assignment", directory_access: "Access",
 } satisfies Record<Resource, string>;
-
-export function Modal({ title, close, children, className }: {
-  title: string; close: () => void; children: ReactNode; className?: string;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const titleId = useId();
-  useEffect(() => {
-    const element = dialog.current;
-    element?.showModal();
-    return () => element?.close();
-  }, []);
-
-  return (
-    <dialog ref={dialog} className={className} aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); close(); }}>
-      <div className="modal-heading"><h2 id={titleId}>{title}</h2>
-        <button type="button" className="icon-button" aria-label="Close dialog" onClick={close}><X size={20} /></button>
-      </div>
-      {children}
-    </dialog>
-  );
-}
 
 export function ContactFields({ contact }: { contact?: Contact }) {
   const [fields, setFields] = useState({
@@ -177,8 +159,12 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
   const contact = state.resource === "contacts" ? state.row : undefined;
   const ward = state.resource === "contacts" ? state.ward : undefined;
   const [focusType, setFocusType] = useState<FocusType | "">(contact?.focus_type ?? (ward ? "recent_convert" : ""));
-  const stake = state.resource === "units" && state.row?.kind === "stake" ? state.row : undefined;
-  const recordLabel = conference ? `${unitLabels[conference.unit.kind]} conference` : focusType ? "Focus person" : stake ? "Stake" : labels[resource];
+  const unitToEdit = state.resource === "units" ? state.row : undefined;
+  const unitKind = unitToEdit?.kind;
+  const childEntryKind = unitKind === "region" || unitKind === "council" || unitKind === "stake" ? unitKind : undefined;
+  const childEntry = childEntryKind ? childUnitEntry[childEntryKind] : undefined;
+  const recordLabel = conference ? `${unitLabels[conference.unit.kind]} conference` : focusType ? "Focus person"
+    : childEntryKind ? unitLabels[childEntryKind] : labels[resource];
   const revoke = resource === "directory_access" ? state.revoke : undefined;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -215,9 +201,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
     ? (state.position ? types.get(state.position.calling_type_id) : state.callingType)
     : undefined;
   const canAssignBuildings = isBuildingScheduler(assignmentType, directory.calling_names);
-  const buildingOptions = canAssignBuildings ? directory.buildings.map((building) => ({
-    id: building.id, address: formatBuildingAddress(building),
-  })).sort((a, b) => a.address.localeCompare(b.address)) : [];
+  const buildingGroups = canAssignBuildings ? groupBuildingsByCity(directory.buildings) : [];
   const units = new Map(directory.units.map((unit) => [unit.id, unit]));
   const contactQueryTerms = contactQuery.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   const matchingContacts = resource === "assignments" && !row && !newContact && !selectedContactId && contactQueryTerms.length
@@ -256,24 +240,24 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
     }
   }
 
-  async function submitStakeUnits(event: FormEvent<HTMLFormElement>) {
+  async function submitChildUnits(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!stake || busy) return;
+    if (!unitToEdit || !childEntryKind || !childEntry || busy) return;
     const form = event.currentTarget;
     setBusy(true);
     setUnitAddError("");
     setUnitAddStatus("");
     try {
-      const result = await addStakeUnits(stake.id, new FormData(form));
+      const result = await addChildUnits(unitToEdit.id, childEntryKind, new FormData(form));
       if (result.error !== null) {
         setUnitAddError(result.error);
       } else {
         form.reset();
-        const message = `Added ${result.added} ${result.added === 1 ? "unit" : "units"}.`;
+        const message = `Added ${result.added} ${result.added === 1 ? childEntry.singular : childEntry.plural}.`;
         setUnitAddStatus(result.skipped ? `${message} Skipped ${result.skipped} ${result.skipped === 1 ? "duplicate" : "duplicates"}.` : message);
       }
     } catch {
-      setUnitAddError("Could not save the units. Please try again.");
+      setUnitAddError(`Could not save the ${childEntry.plural}. Please try again.`);
     } finally {
       setBusy(false);
     }
@@ -325,10 +309,9 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
         break;
       }
       case "buildings": {
-        const photo = data.get("photo");
-        if (photo instanceof File && photo.name && (photo.size === 0 || photo.size > buildingPhotoMaxBytes ||
-          !Object.hasOwn(buildingPhotoTypes, photo.type))) {
-          setError("Choose a JPEG, PNG, or WebP picture up to 4 MB.");
+        const photoError = prepareBuildingPhoto(data);
+        if (photoError) {
+          setError(photoError);
           return;
         }
         await run(() => saveBuilding(state.row?.id ?? null, data));
@@ -466,13 +449,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               </label>
               <FacebookUrlFields urls={unitFacebookUrls(state.row)} disabled={busy} />
             </>}
-            <label>Building <span className="optional">optional</span>
-              <select name="building_id" defaultValue={state.row?.building_id ?? ""}>
-                <option value="">Choose a building</option>
-                {[...directory.buildings].sort((a, b) => a.address.localeCompare(b.address)).map((building) =>
-                  <option key={building.id} value={building.id}>{formatBuildingAddress(building)}</option>)}
-              </select>
-            </label>
+            <BuildingField buildings={directory.buildings} units={directory.units} initialId={state.row?.building_id} disabled={busy} />
             {hasSacramentMeeting(kind) && <>
               <label>Language<select name="language_id" value={unitLanguage}
                 data-language-color={languageColor(languages.find((language) => language.id === unitLanguage))} onChange={(event) => {
@@ -525,40 +502,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               <input name="stake_council_time" type="time" defaultValue={state.row?.stake_council_time?.slice(0, 5)} />
             </label>}
           </>}
-          {state.resource === "buildings" && <>
-            <label>Street address
-              <input name="address" autoComplete="address-line1" maxLength={300} required defaultValue={state.row?.address} />
-            </label>
-            <label>City
-              <input name="city" autoComplete="address-level2" maxLength={150} required defaultValue={state.row?.city ?? ""} />
-            </label>
-            <div className="building-address-fields">
-              <label>State
-                <input name="state" autoComplete="address-level1" autoCapitalize="characters" pattern="[A-Za-z]{2}"
-                  title="Two-letter state abbreviation" maxLength={2} required defaultValue={state.row?.state ?? "ID"} />
-              </label>
-              <label>ZIP code
-                <input name="zip_code" autoComplete="postal-code" pattern="[0-9]{5}(-[0-9]{4})?"
-                  title="Five digits, or ZIP+4" maxLength={10} required defaultValue={state.row?.zip_code ?? ""} />
-              </label>
-            </div>
-            <label>Agent Stake <span className="optional">optional</span>
-              <select name="agent_stake_id" defaultValue={state.row?.agent_stake_id ?? ""}>
-                <option value="">Choose a stake</option>
-                {directory.units.filter((unit) => unit.kind === "stake")
-                  .map((unit) => ({ unit, path: unitPath(unit, units) }))
-                  .sort((a, b) => a.path.localeCompare(b.path))
-                  .map(({ unit }) => <option key={unit.id} value={unit.id}>{unitPath(unit, units, "dropdown")}</option>)}
-              </select>
-            </label>
-            {state.row?.photo_path && <Image className="building-photo-preview" src={buildingPhotoUrl(state.row)}
-              width={480} height={240} alt="Current building picture" unoptimized />}
-            <label>{state.row?.photo_path ? "Replace picture" : "Building picture"} <span className="optional">optional</span>
-              <input name="photo" type="file" accept={Object.keys(buildingPhotoTypes).join(",")}
-                aria-describedby="building-photo-help" />
-              <span className="field-help" id="building-photo-help">JPEG, PNG, or WebP up to 4 MB.</span>
-            </label>
-          </>}
+          {state.resource === "buildings" && <BuildingFields building={state.row} units={directory.units} />}
           {conference && <>
             <p>{conference.unit.name}</p>
             <label>Begin date
@@ -678,13 +622,16 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             </>}
             {canAssignBuildings && <fieldset>
               <legend>Buildings <span className="optional">optional</span></legend>
-              {buildingOptions.length ? <div className="assignment-building-options">
-                {buildingOptions.map(({ id, address }) => <label className="check" key={id}>
-                  <input name="building_ids" type="checkbox" value={id}
-                    defaultChecked={state.row?.assignment_buildings?.some(({ building_id }) => building_id === id)} />
-                  {address}
-                </label>)}
-              </div> : <p className="field-help">Add buildings under Units → Buildings.</p>}
+              {buildingGroups.length ? <div className="assignment-building-options">
+                {buildingGroups.map(({ city, buildings }) => <div key={city} role="group" aria-label={city || "City not set"}>
+                  <p className="assignment-building-city">{city || "City not set"}</p>
+                  {buildings.map((building) => <label className="check" key={building.id}>
+                    <input name="building_ids" type="checkbox" value={building.id}
+                      defaultChecked={state.row?.assignment_buildings?.some(({ building_id }) => building_id === building.id)} />
+                    {formatBuildingAddress(building)}
+                  </label>)}
+                </div>)}
+              </div> : <p className="field-help">No buildings available.</p>}
             </fieldset>}
             <AssignmentLabelsField assignments={directory.assignments} initialLabels={state.row?.assignment_labels} disabled={busy} />
             <label>Sustained date <span className="optional">optional</span><input type="date" name="sustained_on" defaultValue={state.row?.sustained_on ?? ""} /></label>
@@ -707,15 +654,14 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
             </button>
           </div>
         </form>
-        {stake && kind === "stake" && <form className="modal-body stack stake-add-units" onSubmit={submitStakeUnits}>
+        {childEntry && kind === childEntryKind && <form className="modal-body stack child-unit-entry" onSubmit={submitChildUnits}>
           <fieldset disabled={busy}>
-            <legend>Add wards and branches</legend>
-            <p className="field-help">Type or paste one unit name per line.</p>
-            <label>Wards<textarea name="wards" rows={3} /></label>
-            <label>Branches<textarea name="branches" rows={3} /></label>
+            <legend>{childEntry.heading}</legend>
+            <p className="field-help">Type or paste one name per line.</p>
+            {childEntry.fields.map(({ kind, label }) => <label key={kind}>{label}<textarea name={kind} rows={3} /></label>)}
             {unitAddError && <p className="notice error" role="alert">{unitAddError}</p>}
             {unitAddStatus && <p className="notice" role="status">{unitAddStatus}</p>}
-            <div className="form-actions"><button type="submit" className="button primary">Add units</button></div>
+            <div className="form-actions"><button type="submit" className="button primary">{childEntry.button}</button></div>
           </fieldset>
         </form>}
       </>}

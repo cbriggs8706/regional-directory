@@ -3,7 +3,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { Plus, X } from "lucide-react";
 import { useRouteNavigation } from "./route-navigation";
-import { formatBuildingAddress, unitPath, type Directory } from "../lib/directory";
+import { unitPath, type Directory } from "../lib/directory";
 import {
   agentLabel, isOrganizationAgent, type DirectoryOrganization, type OrganizationAssignment,
   type OrganizationEvent, type OrganizationTitle,
@@ -11,7 +11,9 @@ import {
 import { socialChannels, type SocialLink } from "../lib/social-links";
 import { journalNotesMaxLength } from "../lib/unit-journal";
 import { todayInVisitZone } from "../lib/visits";
-import { ContactFields, HomeWardField, Modal } from "./editor";
+import { BuildingField } from "./building-fields";
+import { ContactFields, HomeWardField } from "./editor";
+import { Modal } from "./modal";
 import { removeOrganizationRecord, saveOrganizationRecord } from "./organization-actions";
 
 export type OrganizationEditorState =
@@ -163,13 +165,7 @@ export function OrganizationEditor({ state, directory, close }: {
                 <option key={id} value={id}>{name} · {agentLabel(kind)}</option>)}
             </select>
           </label>
-          <label>Building <span className="optional">optional</span>
-            <select name="building_id" defaultValue={org?.building_id ?? ""}>
-              <option value="">Select a building</option>
-              {[...directory.buildings].sort((a, b) => a.address.localeCompare(b.address)).map((building) =>
-                <option key={building.id} value={building.id}>{formatBuildingAddress(building)}</option>)}
-            </select>
-          </label>
+          <BuildingField buildings={directory.buildings} units={directory.units} initialId={org?.building_id} disabled={busy} />
           <label>Website <span className="optional">optional</span>
             <input name="website_url" type="url" maxLength={2048} defaultValue={org?.website_url ?? ""} />
           </label>

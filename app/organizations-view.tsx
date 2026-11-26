@@ -10,6 +10,7 @@ import { todayInVisitZone } from "../lib/visits";
 import { AddMenu } from "./add-menu";
 import { BuildingPageHeader } from "./building-page-header";
 import { ReorderList } from "./calling-groups";
+import { EmailAllButton } from "./email-all-button";
 import { PageSectionTabs, usePageSection } from "./page-section-tabs";
 import { PendingContent, SectionSkeleton } from "./pending-content";
 import { saveOrganizationTitleOrder } from "./organization-actions";
@@ -169,10 +170,13 @@ function OrganizationAssignments({ organizationId, name, contacts, records, setE
           return <section className="unit-calling" key={title.id} aria-labelledby={`assignment-title-${title.id}`}>
             <header className="unit-calling-heading">
               <h3 id={`assignment-title-${title.id}`}>{title.name}</h3>
-              <button type="button" className="icon-button" aria-label={`Edit ${title.name} title`}
-                onClick={() => setEditor({ resource: "organization_titles", organizationId, row: title })}>
-                <Pencil size={16} aria-hidden />
-              </button>
+              <div className="toolbar">
+                <EmailAllButton group={title.name} emails={active.map(({ contact_id }) => people.get(contact_id)?.email)} />
+                <button type="button" className="icon-button" aria-label={`Edit ${title.name} title`}
+                  onClick={() => setEditor({ resource: "organization_titles", organizationId, row: title })}>
+                  <Pencil size={16} aria-hidden />
+                </button>
+              </div>
             </header>
             <ul className="unit-holder-grid" aria-label={`${title.name} holders and vacancies`}>
               {active.map(holderCard)}
