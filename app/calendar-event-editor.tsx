@@ -3,9 +3,10 @@
 import { useState, type FormEvent } from "react";
 import { Modal } from "./editor";
 
-export function CalendarEventEditor({ defaultDate, close, saved, saveEvent, title, event, removeEvent, removed }: {
+export function CalendarEventEditor({ defaultDate, close, saved, saveEvent, title, description, event, removeEvent, removed }: {
   defaultDate: string;
   title: string;
+  description?: string;
   event?: { title: string; event_date: string; end_date: string | null };
   saveEvent: (values: { title: FormDataEntryValue | null; event_date: FormDataEntryValue | null; end_date: FormDataEntryValue | null }) =>
     Promise<{ error: string } | { error: null; date: string }>;
@@ -59,6 +60,7 @@ export function CalendarEventEditor({ defaultDate, close, saved, saveEvent, titl
 
   return <Modal title={title} close={() => { if (!busy) close(); }}>
     <form className="modal-body stack" onSubmit={submit}>
+      {description && <p className="field-help">{description}</p>}
       <label>Title<input name="title" defaultValue={event?.title} disabled={busy} maxLength={150} required /></label>
       <label>Start date
         <input name="event_date" type="date" min="0001-01-01" max="9999-12-31" defaultValue={event?.event_date ?? defaultDate} disabled={busy} required />

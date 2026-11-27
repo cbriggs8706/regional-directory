@@ -1,13 +1,45 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { formatBuildingAddress, unitNameWithType, type Building, type Unit } from "../lib/directory";
+import { formatBuildingAddress, hasSacramentMeeting, unitLineage, unitNameWithType, type Building, type Unit } from "../lib/directory";
 import { AddressLink } from "./address-link";
 import { formatVisitTime, minuteToTime, timeToMinute, visitLabels, type VisitEvent, type VisitKind } from "../lib/visits";
 import { deleteVisit, loadUnitDateEvents, saveVisit, scheduleVisit } from "./visit-actions";
 import { Modal } from "./editor";
 
 export type VisitEditorEntry = { unit?: Unit; day: string; event?: VisitEvent; minute?: number };
+
+function VisitUnitOptions({ units }: { units: Map<string, Unit> }) {
+  const paths = [...units.values()].map((unit) => ({ unit, lineage: unitLineage(unit, units) }));
+  paths.sort((a, b) => {
+    for (const [index, unit] of a.lineage.entries()) {
+      const other = b.lineage[index];
+      if (!other) return 1;
+      if (unit.id !== other.id) return unit.name.localeCompare(other.name) || unit.id.localeCompare(other.id);
+    }
+    return a.lineage.length - b.lineage.length;
+  });
+
+  const groups = new Map<string, { label: string; options: { unit: Unit; indented: boolean }[] }>();
+  for (const { unit, lineage } of paths) {
+    const council = lineage.find(({ kind }) => kind === "council");
+    const groupId = council?.id ?? (unit.kind === "region" ? "regions" : "other");
+    let group = groups.get(groupId);
+    if (!group) {
+      group = { label: council ? unitNameWithType(council) : unit.kind === "region" ? "Regions" : "Other units", options: [] };
+      groups.set(groupId, group);
+    }
+    group.options.push({ unit, indented: hasSacramentMeeting(unit.kind) && lineage.some(({ kind }) => kind === "stake") });
+  }
+
+  return <>
+    {[...groups].map(([id, { label, options }]) => <optgroup key={id} label={label}>
+      {options.map(({ unit, indented }) => <option key={unit.id} value={unit.id}>
+        {`${indented ? "\u00a0\u00a0\u00a0" : ""}${unitNameWithType(unit)}`}
+      </option>)}
+    </optgroup>)}
+  </>;
+}
 
 export function scheduledMessage(added: number) {
   return added ? `Added ${added} ${added === 1 ? "meeting" : "meetings"} to your calendar.`
@@ -45,7 +77,7 @@ function ExistingUnitEvents({ day, scope, editingId }: { day: string; scope: Uni
 
 export function VisitEditor({ entry, editable, building, parentUnit, eventScope, unitPicker, close, done }: {
   entry: VisitEditorEntry; editable: boolean; building?: Building; parentUnit?: Unit; eventScope?: Unit[];
-  unitPicker?: { options: { unit: Unit; label: string }[]; select: (unit: Unit | undefined) => void };
+  unitPicker?: { units: Map<string, Unit>; select: (unit: Unit | undefined) => void };
   close: () => void; done: (day: string, message: string, removed?: boolean) => void;
 }) {
   const { event, unit } = entry;
@@ -121,12 +153,12 @@ export function VisitEditor({ entry, editable, building, parentUnit, eventScope,
     <form className="modal-body stack" onSubmit={submit}>
       {unitPicker ? <label>Unit
         <select value={unit?.id ?? ""} required disabled={busy} onChange={(e) => {
-          const selected = unitPicker.options.find(({ unit }) => unit.id === e.target.value)?.unit;
+          const selected = unitPicker.units.get(e.target.value);
           unitPicker.select(selected);
           setUseMeetings(Boolean(selected?.sacrament_meeting_time || selected?.council_meeting_time));
         }}>
           <option value="">Select a unit</option>
-          {unitPicker.options.map(({ unit, label }) => <option key={unit.id} value={unit.id}>{label}</option>)}
+          <VisitUnitOptions units={unitPicker.units} />
         </select>
       </label> : unit && <strong>{unit.name}</strong>}
       {building && <small><AddressLink address={formatBuildingAddress(building)} /></small>}
@@ -136,7 +168,7 @@ export function VisitEditor({ entry, editable, building, parentUnit, eventScope,
       </label>}
       <label>Date<input type="date" name="date" required value={day} disabled={!editable || busy}
         onChange={(event) => setDay(event.target.value)} /></label>
-      {eventScope && editable && day && <ExistingUnitEvents key={day} day={day} scope={eventScope} editingId={event?.id} />}
+      {unit && eventScope && editable && day && <ExistingUnitEvents key={`${unit.id}:${day}`} day={day} scope={eventScope} editingId={event?.id} />}
       {meetingTimes.length > 0 && <section className="visit-meeting-times" aria-label="Saved meeting times">
         <strong>Saved meeting times</strong>
         <ul>

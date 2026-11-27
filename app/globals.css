@@ -494,8 +494,21 @@ legend { font-weight: 700; padding: 0 0 7px; }
 .visit-meeting-times li { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .visit-meeting-times time { white-space: nowrap; font-weight: 650; }
 
-.shared-calendar-heading { align-items: center; flex-wrap: wrap; }
-.shared-calendar-heading .check { color: var(--muted); font-size: .9rem; min-height: 42px; }
+.calendar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0 16px 8px;
+  border: 0;
+  font-size: .875rem;
+  overflow-wrap: anywhere;
+}
+.calendar-filters :is(.check, .calendar-filter-label) { min-height: 36px; }
+.calendar-filter-label { display: flex; align-items: center; gap: 9px; }
+.calendar-color { flex: 0 0 10px; height: 10px; border-radius: 50%; background: var(--green); }
 .shared-calendar-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; }
 .shared-calendar-toolbar h2 { font-size: 1.15rem; }
 .shared-calendar-toolbar .toolbar { gap: 3px; }
@@ -516,21 +529,20 @@ legend { font-weight: 700; padding: 0 0 7px; }
 .shared-calendar-day[data-today="true"] > time { background: var(--green); color: white; border-radius: 5px; }
 .shared-calendar-day > ul { display: grid; gap: 4px; }
 .shared-calendar-event {
+  --calendar-color: var(--green);
   display: grid;
   gap: 2px;
   padding: 6px 7px;
   border-radius: 6px;
-  background: var(--mint);
-  color: var(--dark-green);
+  border-inline-start: 3px solid var(--calendar-color);
+  background: color-mix(in srgb, var(--calendar-color) 13%, var(--paper));
+  color: color-mix(in srgb, var(--calendar-color) 65%, var(--ink));
   font-size: .78rem;
   line-height: 1.25;
   overflow-wrap: anywhere;
   text-decoration: none;
 }
-.shared-calendar-event[data-kind="organization"] { background: #e2f0f8; color: #23485e; }
-.shared-calendar-event[data-kind="standalone"] { background: #ece8f8; color: #423768; }
-.shared-calendar-event[data-kind="visit"] { background: #f5ecd5; color: #59421c; }
-button.shared-calendar-event { width: 100%; border: 0; text-align: left; }
+button.shared-calendar-event { width: 100%; border-block: 0; border-inline-end: 0; text-align: left; }
 :is(a, button).shared-calendar-event:hover strong { text-decoration: underline; }
 .shared-calendar-event:focus-visible { outline-offset: -2px; }
 .shared-calendar-event > span { font-size: .74rem; }

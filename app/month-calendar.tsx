@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { unitNameWithType, type Unit } from "../lib/directory";
 import { formatVisitTime, offsetDate, offsetMonth, visitLabels, type VisitEvent } from "../lib/visits";
@@ -12,9 +12,10 @@ const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 
 export type CalendarEvent = {
   id: string;
-  kind: "conference" | "organization" | "standalone" | "visit";
   title: string;
   source?: string;
+  owner?: string;
+  color?: string;
   href?: string;
   open?: () => void;
   start?: number | null;
@@ -35,9 +36,9 @@ export function placeCalendarEvent(days: Map<string, CalendarEvent[]>, event: Ca
 }
 
 export function placeCalendarVisit(days: Map<string, CalendarEvent[]>, visit: VisitEvent, unit: Unit | undefined,
-  action: Pick<CalendarEvent, "href" | "open">) {
+  action: Pick<CalendarEvent, "color" | "owner" | "open">) {
   const event: CalendarEvent = {
-    id: `visit-${visit.id}`, kind: "visit", title: visit.title || visitLabels[visit.kind],
+    id: `visit-${visit.id}`, title: visit.title || visitLabels[visit.kind],
     source: unit ? unitNameWithType(unit) : undefined, ...action,
     start: visit.start_minute, end: Math.min(1440, visit.end_minute),
   };
@@ -79,16 +80,18 @@ export function MonthCalendar({ month, today, setMonth, byDay, children }: {
               <span>{dayLabel.format(new Date(day))}</span>
             </time>
             {events.length > 0 && <ul>
-              {sortedEvents.map(({ id, kind, title, source, href, open, start, end }) => {
+              {sortedEvents.map(({ id, title, source, owner, color, href, open, start, end }) => {
+                const style = color ? { "--calendar-color": color } as CSSProperties : undefined;
                 const content = <>
                   <strong>{title}</strong>
                   {source && <span>{source}</span>}
                   {start != null && <span>{formatVisitTime(start)}{end != null && ` – ${formatVisitTime(end)}`}</span>}
+                  {owner && <span>{owner}</span>}
                 </>;
                 return <li key={id}>{href
-                  ? <RouteLink className="shared-calendar-event" data-kind={kind} href={href} prefetch={false}>{content}</RouteLink>
-                  : open ? <button type="button" className="shared-calendar-event" data-kind={kind} onClick={open}>{content}</button>
-                    : <div className="shared-calendar-event" data-kind={kind}>{content}</div>}
+                  ? <RouteLink className="shared-calendar-event" style={style} href={href} prefetch={false}>{content}</RouteLink>
+                  : open ? <button type="button" className="shared-calendar-event" style={style} onClick={open}>{content}</button>
+                    : <div className="shared-calendar-event" style={style}>{content}</div>}
                 </li>;
               })}
             </ul>}

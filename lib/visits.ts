@@ -4,6 +4,12 @@ export const visitLabels = {
   sacrament: "Sacrament meeting",
   council: "Ward / branch council",
   visit: "Unit visit",
+  sacrament_talk: "Sacrament Talk",
+  fifth_sunday_lesson: "5th Sunday Lesson",
+  youth: "Youth",
+  activity: "Activity",
+  coordinating_council: "Coordinating Council",
+  training: "Training",
   drive: "Driving",
 } as const;
 

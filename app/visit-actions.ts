@@ -3,32 +3,12 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { getViewer } from "../lib/supabase";
-import { formatVisitTime, offsetDate, visitLabels, type UnitDateEvent, type VisitEvent } from "../lib/visits";
+import { formatVisitTime, offsetDate, visitLabels, type UnitDateEvent, type VisitEvent, type VisitKind } from "../lib/visits";
 
 const uuid = z.uuid();
 const date = z.iso.date();
 const accessError = "You need approved directory access.";
 const visitNotes = z.string().trim().max(4000).nullable().optional();
-
-export async function loadVisitEvents(from: string, until: string, includeTeam: boolean): Promise<{ events: VisitEvent[]; error: string | null }> {
-  const viewer = await getViewer();
-  if (!viewer?.role) return { events: [], error: accessError };
-  if (!date.safeParse(from).success || !date.safeParse(until).success || until <= from || until > offsetDate(from, 92)) {
-    return { events: [], error: "Choose a valid calendar date range." };
-  }
-  const events: VisitEvent[] = [];
-  for (let start = 0; ; start += 500) {
-    const query = viewer.client.from("visit_events")
-      .select("*")
-      .gte("event_date", offsetDate(from, -1)).lt("event_date", until)
-      .order("event_date").order("id").range(start, start + 499);
-    if (!includeTeam) query.eq("owner_id", viewer.user.id);
-    const { data, error } = await query;
-    if (error) return { events: [], error: "Could not load visits for this date range." };
-    events.push(...data as VisitEvent[]);
-    if (data.length < 500) return { events, error: null };
-  }
-}
 
 export async function loadUnitDateEvents(unitIds: string[], day: string): Promise<{ events: UnitDateEvent[]; error: string | null }> {
   const viewer = await getViewer();
@@ -85,7 +65,7 @@ export async function scheduleVisit(unitId: string, day: string, notes?: string 
 const visitSchema = z.object({
   id: uuid.nullable(),
   unit_id: uuid.nullable(),
-  kind: z.enum(["sacrament", "council", "visit", "drive"]),
+  kind: z.enum(Object.keys(visitLabels) as VisitKind[]),
   title: z.string().trim().min(1).max(150).nullable().optional(),
   notes: visitNotes,
   event_date: date,

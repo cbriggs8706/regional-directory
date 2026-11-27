@@ -15,8 +15,8 @@ import { OrganizationsView } from "./organizations-view";
 import { UnitPageContent } from "./unit-page-content";
 import { CallingGroups } from "./calling-groups";
 import { AssignmentBuildings } from "./assignment-buildings";
-import { MyCalendar } from "./my-calendar";
-import { SharedCalendar } from "./shared-calendar";
+import { DirectoryCalendar } from "./directory-calendar";
+import { CalendarAccessEditor } from "./calendar-access-editor";
 import { FamilyHistoryDashboard } from "./family-history-dashboard";
 import { ReportGenerator } from "./report-generator/report-generator";
 import { PendingContent, SectionSkeleton } from "./pending-content";
@@ -39,7 +39,6 @@ const primarySections = [
 ] as const;
 const sections = [
   ...primarySections,
-  { id: "visits", label: "My Calendar", description: "Your visits and private events", Icon: CalendarDays },
   { id: "callings", label: "Callings", Icon: Tags },
   { id: "access", label: "Admin", description: "Manage access", Icon: ShieldCheck },
 ] as const;
@@ -148,7 +147,8 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
   unitData: UnitDetailLoad | null;
 }) {
   const params = useSearchParams();
-  const requestedTab = params.get("tab");
+  const tabParam = params.get("tab");
+  const requestedTab = tabParam === "visits" ? "calendar" : tabParam;
   const standalone = journalReport ? "report-generator" : organizationsPage ? "organizations" : managementSection;
   const tab = standalone ?? (unitId ? "units" : sections.find(({ id }) =>
     id === requestedTab && (admin || !isAdminDirectoryTab(id)))?.id ?? "dashboard");
@@ -164,6 +164,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
   const [unitFilter, setUnitFilter] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [editor, setEditor] = useState<EditorState | null>(null);
+  const [calendarAccount, setCalendarAccount] = useState<string | null>(null);
   const [compose, setCompose] = useState(false);
   const [copiedAddresses, setCopiedAddresses] = useState("");
   const [manualCopy, setManualCopy] = useState("");
@@ -273,7 +274,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
 
   function navigateTab(next: Tab, event: { preventDefault: () => void }) {
     setMoreOpen(false);
-    if (next === tab && !unitId) {
+    if (next === tab && !unitId && tabParam !== "visits") {
       event.preventDefault();
       return;
     }
@@ -576,19 +577,19 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
         {tab === "languages" && <LanguagesView directory={directory} edit={setEditor} addHost={addHost} />}
         {journalReport && <ReportGenerator key={journalReport.month} {...journalReport} />}
 
-        {tab === "calendar" && <SharedCalendar units={directory.units} stakeConferences={directory.stake_conferences}
-          organizations={organizationDirectory.organizations} addHost={addHost} />}
-        {tab === "visits" && <MyCalendar directory={directory} addHost={addHost} />}
+        {tab === "calendar" && <DirectoryCalendar key={preview ? email : userId} directory={directory} organizations={organizationDirectory.organizations}
+          userId={userId} email={email} admin={admin} preview={preview} addHost={addHost} />}
 
         {tab === "access" && admin && <section aria-labelledby="access-heading">
-          <div className="section-heading"><div><h1 id="access-heading">Access</h1><p>Assign coordinating councils to Google accounts.</p></div>
+          <div className="section-heading"><div><h1 id="access-heading">Access</h1><p>Manage coordinating councils and calendar access for Google accounts.</p></div>
             <button className="button primary" onClick={() => setEditor({ resource: "directory_access" })}><Plus size={18} aria-hidden />Grant access</button></div>
           <div className="panel"><ul className="management-list">
             {directory.directory_access.map((entry) => {
               const councilNames = entry.directory_access_councils.flatMap(({ council_id }) => units.get(council_id)?.name ?? [])
                 .sort((a, b) => a.localeCompare(b));
               return <li key={entry.email}>
-                <div><strong>{entry.email}</strong>
+                <div><button type="button" className="text-button" aria-haspopup="dialog" aria-label={`Edit calendar access for ${entry.email}`}
+                  onClick={() => { setMessage(""); setCalendarAccount(entry.email); }}>{entry.email}</button>
                   <small>{entry.is_admin ? "Administrator · All councils" : councilNames.join(", ") || "No councils assigned"}</small>
                 </div>
                 {!entry.is_admin && <div className="access-actions">
@@ -606,7 +607,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
       </main>
       </div>
 
-      <footer className="directory-footer" ref={!preview && (detailUnit || tab === "dashboard" || tab === "people" || tab === "calendar" || tab === "visits" || managementSection || organizationsPage) ? setAddHost : undefined}>
+      <footer className="directory-footer" ref={!preview && (detailUnit || tab === "dashboard" || tab === "people" || tab === "calendar" || managementSection || organizationsPage) ? setAddHost : undefined}>
         {selectedPeople.length > 0 && <aside className="selection-bar" aria-label="Contact selection">
           <div className="shell selection-inner">
             <div className="selection-summary">
@@ -632,7 +633,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
             </RouteLink>
           ))}
           <button type="button" aria-haspopup="dialog" aria-expanded={moreOpen}
-            data-active={Boolean(standalone) || tab === "visits" || isAdminDirectoryTab(tab)}
+            data-active={Boolean(standalone) || isAdminDirectoryTab(tab)}
             onClick={() => setMoreOpen(true)}>
             <Ellipsis size={22} aria-hidden />More
           </button>
@@ -658,6 +659,9 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
         </div>
       </Modal>}
       {editor && <Editor state={editor} directory={directory} admin={admin} close={() => setEditor(null)} />}
+      {admin && calendarAccount && <CalendarAccessEditor key={calendarAccount} email={calendarAccount}
+        accounts={directory.directory_access.map(({ email }) => email)} close={() => setCalendarAccount(null)}
+        saved={() => { setCalendarAccount(null); setMessage("Calendar access updated."); }} />}
       {compose && <Compose contacts={emailRecipients} pending={pendingMail} ready={mailReady} count={recipientCount}
         close={(clearSelection) => {
           setCompose(false);
