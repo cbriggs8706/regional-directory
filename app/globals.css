@@ -17,6 +17,8 @@
 *, *::before, *::after { box-sizing: border-box; }
 body { display: flex; flex-direction: column; height: 100dvh; margin: 0; }
 .route-content { flex: 1; min-height: 0; }
+:root:has(.route-content > .directory-layout) { overscroll-behavior-y: none; }
+.route-content:has(> .directory-layout) { overflow: clip; }
 button, input, select, textarea { font: inherit; }
 button, summary, input[type="checkbox"], select { cursor: pointer; }
 button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55; }
@@ -36,7 +38,7 @@ svg { flex-shrink: 0; }
 .pending-dot { width: 8px; height: 8px; border-radius: 50%; background: #c07420; }
 
 .directory-layout { display: grid; grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); height: 100%; }
-.directory-content { overflow-x: hidden; overflow-y: auto; }
+.directory-content { position: relative; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: none; }
 .workspace { padding-block: 34px 28px; }
 .directory-footer { position: relative; z-index: 5; border-top: 1px solid var(--line); background: var(--paper); box-shadow: 0 -6px 24px #1f43380e; padding-bottom: env(safe-area-inset-bottom); }
 .footer-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; max-width: 560px; padding-block: 5px; }
