@@ -565,7 +565,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
 
         {tab === "units" && (detailUnit && unitData
           ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} data={unitData}
-              currentMonth={currentMonth} userId={userId} addHost={addHost} admin={admin}
+              currentMonth={currentMonth} userId={userId} addHost={addHost} admin={admin} preview={preview}
               organizationDirectory={organizationDirectory} />
           : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} directory={directory} councilScope={!admin}
               organizationDirectory={organizationDirectory} />)}

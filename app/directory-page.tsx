@@ -11,6 +11,7 @@ import { groupJournalEntries, type JournalReportData, type ReportEntry } from ".
 import type {
   DirectoryOrganization, OrganizationAssignment, OrganizationDetail, OrganizationDirectory, OrganizationEvent, OrganizationTitle,
 } from "../lib/organizations";
+import { unitPlanMigrationMessage, type UnitPlan, type UnitPlanCoverageData } from "../lib/unit-plans";
 import { visitClock, type UnitVisitData, type VisitEvent } from "../lib/visits";
 
 type Viewer = NonNullable<Awaited<ReturnType<typeof getViewer>>>;
@@ -66,6 +67,44 @@ async function loadUnitReports<Table extends keyof ReportTables>(client: Viewer[
     }
   }
   return { reports, loadError: null };
+}
+
+async function loadUnitPlanCoverage(client: Viewer["client"], year: number): Promise<UnitPlanCoverageData> {
+  const uploaded = new Set<string>();
+  // Midnight on January 1 in Boise is UTC−07:00.
+  const from = `${year}-01-01T00:00:00-07:00`;
+  const until = `${year + 1}-01-01T00:00:00-07:00`;
+  for (let start = 0; ; start += 500) {
+    const { data, error } = await client.from("ward_plans").select("unit_id")
+      .gte("created_at", from).lt("created_at", until).order("id").range(start, start + 499);
+    if (error) return {
+      uploadedUnitIds: [],
+      loadError: missingTable(error.code) ? unitPlanMigrationMessage : "Could not load this year’s plan totals.",
+    };
+    for (const { unit_id } of data) uploaded.add(unit_id);
+    if (data.length < 500) return { uploadedUnitIds: [...uploaded], loadError: null };
+  }
+}
+
+async function loadFamilyHistory(client: Viewer["client"], currentMonth: string, wardIds?: string[]) {
+  const planCoverage = loadUnitPlanCoverage(client, Number(currentMonth.slice(0, 4)));
+  const reports = await loadUnitReports(client, "family_history_reports", wardIds);
+  return { ...reports, planCoverage };
+}
+
+async function loadUnitPlans(client: Viewer["client"], unitId: string) {
+  const versions: UnitPlan[] = [];
+  for (let start = 0; ; start += 500) {
+    const { data, error } = await client.from("ward_plans").select("id,filename,created_at")
+      .eq("unit_id", unitId).order("created_at", { ascending: false }).order("id", { ascending: false })
+      .range(start, start + 499);
+    if (error) return {
+      versions: [],
+      loadError: missingTable(error.code) ? unitPlanMigrationMessage : "Could not load the plan archive. Reload to try again.",
+    };
+    versions.push(...data);
+    if (data.length < 500) return { versions, loadError: null };
+  }
 }
 
 async function loadFocusActivity(client: Viewer["client"], wardId: string): Promise<FocusActivityData> {
@@ -238,7 +277,7 @@ export async function DirectoryPage({ viewer, unitId, journalPage, managementSec
 
   const wardIds = unit ? scopeWards(units, unit).map(({ id }) => id) : undefined;
   const familyHistory = managementSection || reportMonth || organizationsPage ? null
-    : loadUnitReports(client, "family_history_reports", wardIds);
+    : loadFamilyHistory(client, currentMonth, wardIds);
   const unitData = unit && wardIds && familyHistory
     ? loadUnitDetail(client, unit, wardIds, journalPage, familyHistory) : null;
   const organizationDetail = organization ? loadOrganizationDetail(client, organization, journalPage) : null;
@@ -252,7 +291,7 @@ export async function DirectoryPage({ viewer, unitId, journalPage, managementSec
     mailReady={Boolean(!previewEmail && process.env.RESEND_API_KEY && process.env.RESEND_FROM)} pending={pending} />;
 }
 
-export type FamilyHistoryLoad = ReturnType<typeof loadUnitReports<"family_history_reports">>;
+export type FamilyHistoryLoad = ReturnType<typeof loadFamilyHistory>;
 export type UnitDetailLoad = ReturnType<typeof loadUnitDetail>;
 
 function loadOrganizationDetail(client: Viewer["client"], organization: DirectoryOrganization, journalPage?: number): OrganizationDetail {
@@ -271,6 +310,7 @@ function loadUnitDetail(client: Viewer["client"], unit: Directory["units"][numbe
   const journal = loadJournal(client, { unitId: unit.id }, journalPage);
   const getInvolved = loadUnitReports(client, "get_involved_reports", wardIds);
   const wardConferences = loadWardConferences(client, wardId);
+  const unitPlans = wardId || unit.kind === "stake" ? loadUnitPlans(client, unit.id) : null;
 
   return {
     familyHistory,
@@ -279,6 +319,8 @@ function loadUnitDetail(client: Viewer["client"], unit: Directory["units"][numbe
     journalPage,
     events: Promise.all([loadUnitVisits(client, unit.id), wardConferences]),
     focusActivity: wardId ? loadFocusActivity(client, wardId) : Promise.resolve(null),
+    unitPlans,
+    canAddUnitPlan: unitPlans?.then(({ loadError }) => !loadError),
     canAddJournal: journal.then(({ loadError }) => !loadError),
     canAddFamilyHistory: familyHistory.then(({ loadError }) => !loadError && wardIds.length > 0),
     canAddGetInvolved: getInvolved.then(({ loadError }) => !loadError && wardIds.length > 0),

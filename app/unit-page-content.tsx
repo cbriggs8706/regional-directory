@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { RouteLink } from "./route-navigation";
-import { BookOpen, CalendarDays, ChartNoAxesColumn, ChevronDown, ChevronRight, ChartLine, Clock3, History, UserPlus } from "lucide-react";
+import { BookOpen, CalendarDays, ChartNoAxesColumn, ChevronDown, ChevronRight, ChartLine, Clock3, History, Upload, UserPlus } from "lucide-react";
 import { abbreviatedUnitName, hasSacramentMeeting, unitFacebookUrls, unitLabels, unitLineage, unitNameWithType, type Directory, type Unit } from "../lib/directory";
 import { scopeWards } from "../lib/family-history";
 import { isOrganizationAgent, type OrganizationDirectory } from "../lib/organizations";
@@ -24,11 +24,12 @@ import { UnitJournal } from "./unit-journal";
 import { UnitSectionHeading } from "./unit-section-heading";
 import { StakeUnits } from "./stake-units";
 import { VisitEditor, type VisitEditorEntry } from "./visit-editor";
+import { UnitPlans } from "./unit-plans";
 
 const unitSections = ["overview", "reports", "get-involved", "units", "callings", "focus", "stewardships"] as const;
 const defaultSection = unitSections[0];
 
-export function UnitPageContent({ unit, directory, edit, data, currentMonth, userId, addHost, admin, organizationDirectory }: {
+export function UnitPageContent({ unit, directory, edit, data, currentMonth, userId, addHost, admin, preview, organizationDirectory }: {
   unit: Unit;
   directory: Directory;
   edit: (state: EditorState) => void;
@@ -36,11 +37,12 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
   currentMonth: string;
   userId: string;
   admin: boolean;
+  preview: boolean;
   addHost: HTMLElement | null;
   organizationDirectory: OrganizationDirectory;
 }) {
   const [reportView, setReportView] = useState<"aggregate" | "comparison">("aggregate");
-  const [newEntry, setNewEntry] = useState<"journal" | "report" | "submitter-history" | "get-involved" | null>(null);
+  const [newEntry, setNewEntry] = useState<"journal" | "report" | "submitter-history" | "get-involved" | "plan" | null>(null);
   const [visitEditor, setVisitEditor] = useState<VisitEditorEntry | null>(null);
   const [visitStatus, setVisitStatus] = useState("");
   const unitSwitcher = useRef<HTMLDetailsElement>(null);
@@ -54,6 +56,7 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
     return () => document.removeEventListener("pointerdown", closeOnOutsidePress);
   }, []);
   const isStake = unit.kind === "stake";
+  const planTitle = `${unitLabels[unit.kind]} Plan`;
   const isWardOrBranch = hasSacramentMeeting(unit.kind);
   const isArea = unit.kind === "region";
   const isMemberArea = isArea && !admin;
@@ -67,8 +70,11 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
     focus: "Focus People",
     stewardships: "Stewardships",
   };
-  const sections = isMemberArea ? (["reports", "get-involved", "units", "callings"] as const) : unitSections.filter((id) => (id !== "focus" || isWardOrBranch) && (id !== "units" || !isWardOrBranch) &&
-    (id !== "stewardships" || isOrganizationAgent(unit.kind)));
+  const sections = isMemberArea ? (["reports", "get-involved", "units", "callings"] as const)
+    : unitSections.filter((id) =>
+      (id !== "focus" || isWardOrBranch)
+      && (id !== "units" || !isWardOrBranch)
+      && (id !== "stewardships" || isOrganizationAgent(unit.kind)));
   const sectionNavigation = usePageSection<(typeof unitSections)[number]>(`/units/${unit.id}`, sections, isMemberArea ? "reports" : defaultSection);
   const { section, showSection } = sectionNavigation;
   const building = directory.buildings.find(({ id }) => id === unit.building_id);
@@ -187,6 +193,9 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
       </section>)}
     {section === "overview" && <section className="unit-tab-section" aria-labelledby="unit-overview-heading">
       <UnitSectionHeading id="unit-overview-heading" title="Overview" unit={unit} />
+      {data.unitPlans && <PendingContent data={data.unitPlans} fallback={<SectionSkeleton label={planTitle} />}>
+        {(plans) => <UnitPlans unit={unit} title={planTitle} currentYear={currentMonth.slice(0, 4)} {...plans} uploadOpen={!preview && newEntry === "plan"} closeUpload={() => setNewEntry(null)} />}
+      </PendingContent>}
       {visitStatus && <p className="notice" role="status">{visitStatus}</p>}
       <PendingContent data={data.events} fallback={<SectionSkeleton label="events and visits" />}>
         {([visits, wardConferences]) => <UnitEvents unit={unit} stake={conferenceStake}
@@ -201,6 +210,8 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
     </section>}
     <AddMenu host={addHost} label="Add to unit" actions={[
       { label: "New journal entry", Icon: BookOpen, hidden: isMemberArea, availableWhen: data.canAddJournal, run: () => openEntry("journal", "overview") },
+      { label: `Add ${planTitle}`, Icon: Upload, hidden: preview || !data.unitPlans,
+        availableWhen: data.canAddUnitPlan, run: () => openEntry("plan", "overview") },
       { label: "Add focus person", Icon: UserPlus, hidden: !isWardOrBranch, run: () => {
         showSection("focus");
         edit({ resource: "contacts", ward: unit });

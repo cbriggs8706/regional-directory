@@ -7,6 +7,8 @@ import {
   countMetrics, formatReportMonth, generationsLabel, monthNames, reportComparisonColor, reportMonthPattern, reportNumber, reportPeriod,
   reportSummary, reportUnits, scopeWards, submitterGroups, type FamilyHistoryReport, type ReportSummary,
 } from "../lib/family-history";
+import type { UnitPlanCoverageData } from "../lib/unit-plans";
+import { PendingContent } from "./pending-content";
 import { MetricChart, SubmittersChart } from "./report-charts";
 import { ReportEntry } from "./report-entry";
 import { SubmitterHistoryEntry } from "./submitter-history-entry";
@@ -32,55 +34,108 @@ function UnitOptions({ councils = [], stakes, wards, unitNames }: { councils?: U
   </>;
 }
 
-function ReportCoverageList({ wards, directory, month, reports }: {
-  wards: Unit[];
-  directory: Map<string, Unit>;
-  month: string;
-  reports: Map<string, FamilyHistoryReport>;
-}) {
-  if (!wards.length) return <p>No wards or branches in this view.</p>;
+function CoverageRing({ completed, total }: { completed: number; total: number }) {
+  const progress = total ? completed / total * 100 : 0;
+  return <svg className="report-coverage-ring" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+    <circle className="report-coverage-track" cx="16" cy="16" r="13" />
+    {progress > 0 && <circle className="report-coverage-fill" cx="16" cy="16" r="13"
+      pathLength="100" strokeDasharray={`${progress} 100`} transform="rotate(-90 16 16)" />}
+  </svg>;
+}
 
-  const councils = new Map<Unit | undefined, Map<Unit | undefined, Unit[]>>();
-  for (const ward of wards) {
-    const lineage = unitLineage(ward, directory);
-    const council = lineage.find(({ kind }) => kind === "council");
-    const stake = lineage.find(({ kind }) => kind === "stake");
-    const stakes = councils.get(council) ?? new Map<Unit | undefined, Unit[]>();
-    const members = stakes.get(stake) ?? [];
-    members.push(ward);
-    stakes.set(stake, members);
-    councils.set(council, stakes);
+function CoverageButton({ label, title, year, group, completed, total, open }: {
+  label: string; title: string; year: string; group: "reports" | "stakes" | "wards";
+  completed: number; total: number; open: () => void;
+}) {
+  return <button type="button" className="panel report-plan-stat" data-plan-group={group}
+    aria-label={label} aria-haspopup="dialog" onClick={open}>
+    <span className="report-plan-ring" aria-hidden="true">
+      <CoverageRing completed={completed} total={total} />
+      <strong>{completed}<small> / {total}</small></strong>
+    </span>
+    <span className="report-plan-caption"><strong className="report-plan-year">{year}</strong><span>{title}</span></span>
+  </button>;
+}
+
+function CoverageList({ units, directory, byStake, isComplete, completedLabel, missingLabel }: {
+  units: Unit[];
+  directory: Map<string, Unit>;
+  byStake: boolean;
+  isComplete: (unit: Unit) => boolean;
+  completedLabel: string;
+  missingLabel: string;
+}) {
+  if (!units.length) return <p>{byStake ? "No wards or branches in this view." : "No stakes in this view."}</p>;
+
+  function groupBy(members: Unit[], parentKind: "council" | "stake") {
+    const groups = new Map<Unit | undefined, Unit[]>();
+    for (const unit of members) {
+      const parent = unitLineage(unit, directory).find(({ kind }) => kind === parentKind);
+      const group = groups.get(parent) ?? [];
+      group.push(unit);
+      groups.set(parent, group);
+    }
+    return [...groups].sort(([a], [b]) => (a?.name ?? "").localeCompare(b?.name ?? ""));
   }
 
-  function byUnitName([a]: [Unit | undefined, unknown], [b]: [Unit | undefined, unknown]) {
-    return (a?.name ?? "").localeCompare(b?.name ?? "");
+  function rows(members: Unit[]) {
+    return <ul className="report-coverage-list" role="list">
+      {members.map((unit) => {
+        const completed = isComplete(unit);
+        return <li key={unit.id}>
+          <span>{unitNameWithType(unit)}</span>
+          {completed && <Check size={20} aria-hidden="true" />}
+          <span className="visually-hidden">{completed ? completedLabel : missingLabel}</span>
+        </li>;
+      })}
+    </ul>;
   }
 
   return <div className="report-coverage-groups">
-    {[...councils].sort(byUnitName).map(([council, stakes]) => <section key={council?.id ?? "unassigned"}>
+    {groupBy(units, "council").map(([council, members]) => <section key={council?.id ?? "unassigned"}>
       <h3>{council ? unitNameWithType(council) : "No coordinating council"}</h3>
-      {[...stakes].sort(byUnitName).map(([stake, members]) => <section key={stake?.id ?? "unassigned"} className="report-coverage-stake">
+      {byStake ? groupBy(members, "stake").map(([stake, wards]) => <section key={stake?.id ?? "unassigned"} className="report-coverage-stake">
         <h4>{stake ? unitNameWithType(stake) : "No stake"}</h4>
-        <ul className="report-coverage-list" role="list">
-          {members.map((unit) => {
-            const filed = reports.has(`${unit.id}/${month}`);
-            return <li key={unit.id}>
-              <span>{unitNameWithType(unit)}</span>
-              {filed && <Check size={20} aria-hidden="true" />}
-              <span className="visually-hidden">{filed ? "Report entered" : "Report missing"}</span>
-            </li>;
-          })}
-        </ul>
-      </section>)}
+        {rows(wards)}
+      </section>) : rows(members)}
     </section>)}
   </div>;
 }
 
-export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError, fixedUnit, comparisonUnits, viewControls, entryDialog, historyDialog, addHost, councilScope = false }: {
+function PlanCoverage({ stakes, wards, directory, year, uploadedUnitIds, loadError }: UnitPlanCoverageData & {
+  stakes: Unit[]; wards: Unit[]; directory: Map<string, Unit>; year: string;
+}) {
+  const [opened, setOpened] = useState<"stakes" | "wards" | null>(null);
+  if (loadError) return <p className="field-help report-plan-status" role="status">{loadError}</p>;
+
+  const uploaded = new Set(uploadedUnitIds);
+  const groups = {
+    stakes: { units: stakes, count: stakes.filter(({ id }) => uploaded.has(id)).length, label: "Stake plans" },
+    wards: { units: wards, count: wards.filter(({ id }) => uploaded.has(id)).length, label: "Ward and branch plans" },
+  };
+  const selected = opened && groups[opened];
+  return <>
+    {(["stakes", "wards"] as const).map((group) => {
+      const { count, units, label } = groups[group];
+      return <CoverageButton key={group} label={`${count} of ${units.length} ${label.toLowerCase()} for ${year}`}
+        title={label} year={year} group={group} completed={count} total={units.length} open={() => setOpened(group)} />;
+    })}
+    {selected && <Modal title={`${selected.label} for ${year}`} close={() => setOpened(null)}>
+      <div className="modal-body stack">
+        <p className="field-help">{selected.count} of {selected.units.length} plans uploaded</p>
+        <CoverageList units={selected.units} directory={directory} byStake={opened === "wards"}
+          isComplete={({ id }) => uploaded.has(id)} completedLabel="Plan uploaded" missingLabel="Plan missing" />
+      </div>
+    </Modal>}
+  </>;
+}
+
+export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError, planCoverage, fixedUnit, comparisonUnits, viewControls, entryDialog, historyDialog, addHost, councilScope = false }: {
   units: Unit[];
   reports: FamilyHistoryReport[];
   currentMonth: string;
   loadError: string | null;
+  planCoverage: Promise<UnitPlanCoverageData>;
   fixedUnit?: Unit;
   comparisonUnits?: Unit[];
   viewControls?: ReactNode;
@@ -112,6 +167,8 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   const comparison = directory.get(compareId);
   const compareAll = Boolean(comparisonUnits?.length);
   const inScope = scopeWards(sorted, scope);
+  const scopedStakes = scope?.level === "ward" ? stakes.filter(({ id }) => id === scope.parent_id)
+    : stakes.filter((stake) => !scope || unitLineage(stake, directory).some(({ id }) => id === scope.id));
   const canEnterReport = !loadError && inScope.length > 0;
   const closeEntry = entryDialog?.close ?? (() => setEntryOpen(false));
   const closeHistory = historyDialog?.close ?? (() => setHistoryOpen(false));
@@ -146,7 +203,6 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   const reportsForMonth = readMonth(scope, month);
   const monthLabel = formatReportMonth(month);
   const coverageLabel = `${reportsForMonth.filed} of ${reportsForMonth.total} unit reports for ${monthLabel}`;
-  const percentFiled = reportsForMonth.total ? reportsForMonth.filed / reportsForMonth.total * 100 : 0;
   const unitSeries = comparisonUnits?.map((target, index) => ({
     id: target.id, label: label(target), unitName: target.name, color: reportComparisonColor(index), target,
   }));
@@ -223,18 +279,16 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
             <p>{label(scope)} · {formatReportMonth(month)}</p>
           </div>
         </div>}
+      <div className="report-plan-coverage" role="group" aria-label="Report and plan progress">
+        {!loadError && <CoverageButton label={coverageLabel} title={`${monthLabel.split(" ")[0]} unit reports`}
+          year={month.slice(0, 4)} group="reports" completed={reportsForMonth.filed} total={reportsForMonth.total}
+          open={() => setCoverageOpen(true)} />}
+        <PendingContent data={planCoverage} fallback={<p className="field-help report-plan-status" role="status">Loading plan totals…</p>}>
+          {(coverage) => <PlanCoverage {...coverage} stakes={scopedStakes} wards={inScope} directory={directory} year={currentYear} />}
+        </PendingContent>
+      </div>
       <div className="report-filter-bar">
-        {!loadError && <div className="report-coverage">
-          <button className="text-button report-coverage-button" type="button" aria-haspopup="dialog" onClick={() => setCoverageOpen(true)}>
-            <svg className="report-coverage-ring" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
-              <circle className="report-coverage-track" cx="16" cy="16" r="13" />
-              {percentFiled > 0 && <circle className="report-coverage-fill" cx="16" cy="16" r="13"
-                pathLength="100" strokeDasharray={`${percentFiled} 100`} transform="rotate(-90 16 16)" />}
-            </svg>
-            <span>{coverageLabel}</span>
-          </button>
-          {comparison && <small>{label(comparison)} · {readMonth(comparison, month).filed} of {compareWards.length} reports</small>}
-        </div>}
+        {!loadError && comparison && <small>{label(comparison)} · {readMonth(comparison, month).filed} of {compareWards.length} reports</small>}
         <div className="report-filters">
           <label>Saved reports
             <select value={availableMonths.length ? month : ""} disabled={Boolean(loadError) || !availableMonths.length}
@@ -262,7 +316,8 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
       {!loadError && coverageOpen && <Modal title={`Unit reports for ${monthLabel}`} close={() => setCoverageOpen(false)}>
         <div className="modal-body stack">
           <p className="field-help">{reportsForMonth.filed} of {reportsForMonth.total} reports entered</p>
-          <ReportCoverageList wards={inScope} directory={directory} month={month} reports={reportIndex} />
+          <CoverageList units={inScope} directory={directory} byStake
+            isComplete={({ id }) => reportIndex.has(`${id}/${month}`)} completedLabel="Report entered" missingLabel="Report missing" />
         </div>
       </Modal>}
       {status && <p className="notice" role="status">{status}</p>}
