@@ -21,7 +21,7 @@ const activitySchema = z.object({
 });
 
 export async function saveFocusActivity(input: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = activitySchema.safeParse(input);
   if (!parsed.success) return { error: "Choose a valid reporting month and activity status." };

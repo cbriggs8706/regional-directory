@@ -14,7 +14,7 @@ const entrySchema = z.object({
 }).refine(({ unitId, organizationId }) => Boolean(unitId) !== Boolean(organizationId));
 
 export async function saveJournalEntry(input: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = entrySchema.safeParse(input);
   if (!parsed.success) return { error: "Enter a valid date and up to 10,000 characters of notes." };

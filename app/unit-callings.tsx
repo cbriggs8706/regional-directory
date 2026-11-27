@@ -18,6 +18,7 @@ const dateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZ
 export function UnitCallings({ unit, directory, edit, title, admin }: {
   unit: Unit; directory: Directory; edit: (state: EditorState) => void; title: string; admin: boolean;
 }) {
+  const readOnly = unit.kind === "region" && !admin;
   const [managing, setManaging] = useState<string | null>(null);
   const organizations = directory.organizations.filter((organization) => organization.level === unit.level).sort(compareCallingOrder);
   const groups: { key: string; name: string; organization?: Organization; template?: StandardCallingGroup }[] =
@@ -50,7 +51,7 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
   function holderCard(assignment: Assignment, calling: CallingType, position: Position, canAddAnother = false) {
     const name = holderName(assignment);
     const callingName = assignment.released_on ? assignment.calling_name : calling.name;
-    return <PersonCard className="panel unit-holder-card" key={assignment.id} person={contacts.get(assignment.contact_id)}>
+    return <PersonCard className="panel unit-holder-card" key={assignment.id} person={contacts.get(assignment.contact_id)} canEdit={!readOnly}>
       <span className="unit-holder-icon"><UserRound size={19} aria-hidden /></span>
       <div className="unit-holder-info">
         <strong>{name}</strong>
@@ -61,14 +62,14 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
           {assignment.assignment_labels.map((label) => <span className="chip" key={label}>{label}</span>)}
         </div>}
         <AssignmentBuildings assignment={assignment} buildings={buildings} />
-        {canAddAnother && <button type="button" className="text-button" aria-label={`Add another holder for ${calling.name}`}
+        {!readOnly && canAddAnother && <button type="button" className="text-button" aria-label={`Add another holder for ${calling.name}`}
           onClick={() => addHolder(calling, position)}><Plus size={16} aria-hidden />Add another holder</button>}
       </div>
-      <button className="icon-button" aria-label={`Edit ${callingName} assignment for ${name}`}
+      {!readOnly && <button className="icon-button" aria-label={`Edit ${callingName} assignment for ${name}`}
         title={assignment.released_on ? "Edit assignment" : "Edit or release"}
         onClick={() => edit({ resource: "assignments", position, row: assignment })}>
         <Pencil size={16} aria-hidden />
-      </button>
+      </button>}
     </PersonCard>;
   }
 
@@ -78,7 +79,7 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
 
   function vacantCard(key: string, name: string, add: () => void, retired = false) {
     const element = <li key={key} className="panel unit-holder-vacant">
-      {retired ? <div className="unit-vacancy-content"><strong>{name}</strong><small>Retired</small></div>
+      {retired || readOnly ? <div className="unit-vacancy-content"><strong>{name}</strong><small>{retired ? "Retired" : "Vacant"}</small></div>
         : <button type="button" className="unit-vacancy-content unit-vacancy-add" onClick={add} aria-label={`Add holder for ${name}`}>
           <span className="unit-holder-icon"><Plus size={19} aria-hidden /></span>
           <strong>{name}</strong>
@@ -155,8 +156,8 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
             <h3 id={`unit-organization-${key}`}>{name}</h3>
             <div className="toolbar">
               <EmailAllButton group={name} emails={emails} />
-              <button type="button" className="icon-button" aria-label={`Edit ${name}`} title={`Edit ${name}`}
-                onClick={() => setManaging(key)}><Pencil size={16} aria-hidden /></button>
+              {!readOnly && <button type="button" className="icon-button" aria-label={`Edit ${name}`} title={`Edit ${name}`}
+                onClick={() => setManaging(key)}><Pencil size={16} aria-hidden /></button>}
             </div>
           </div>
           {cards.length ? <ul className="unit-holder-grid" aria-label={`${name} calling holders and vacancies`}>

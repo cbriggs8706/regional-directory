@@ -43,12 +43,13 @@ function ExistingUnitEvents({ day, scope, editingId }: { day: string; scope: Uni
   </>;
 }
 
-export function VisitEditor({ entry, editable, building, parentUnit, eventScope, close, done }: {
+export function VisitEditor({ entry, editable, building, parentUnit, eventScope, unitPicker, close, done }: {
   entry: VisitEditorEntry; editable: boolean; building?: Building; parentUnit?: Unit; eventScope?: Unit[];
-  close: () => void; done: (day: string, message: string) => void;
+  unitPicker?: { options: { unit: Unit; label: string }[]; select: (unit: Unit | undefined) => void };
+  close: () => void; done: (day: string, message: string, removed?: boolean) => void;
 }) {
   const { event, unit } = entry;
-  const isDrive = !unit;
+  const isDrive = !unit && !unitPicker;
   const councilLabel = unit?.kind === "branch" ? "Branch Council" : "Ward Council";
   const automaticMeetings = [
     { label: "Sacrament meeting", time: unit?.sacrament_meeting_time },
@@ -73,7 +74,7 @@ export function VisitEditor({ entry, editable, building, parentUnit, eventScope,
 
   async function submit(eventSubmit: FormEvent<HTMLFormElement>) {
     eventSubmit.preventDefault();
-    if (busy || !editable) return;
+    if (busy || !editable || (unitPicker && !unit)) return;
     const data = new FormData(eventSubmit.currentTarget);
     const notes = String(data.get("notes") ?? "").trim() || null;
     setBusy(true);
@@ -108,7 +109,7 @@ export function VisitEditor({ entry, editable, building, parentUnit, eventScope,
     try {
       const response = await deleteVisit(event.id);
       if (response.error) setError(response.error);
-      else done(event.event_date, "Visit removed.");
+      else done(event.event_date, "Visit removed.", true);
     } catch {
       setError("Could not remove this visit.");
     } finally {
@@ -118,7 +119,16 @@ export function VisitEditor({ entry, editable, building, parentUnit, eventScope,
 
   return <Modal title={event ? visitLabels[event.kind] : isDrive ? "Add driving time" : "Schedule a visit"} close={() => { if (!busy) close(); }}>
     <form className="modal-body stack" onSubmit={submit}>
-      {unit && <strong>{unit.name}</strong>}
+      {unitPicker ? <label>Unit
+        <select value={unit?.id ?? ""} required disabled={busy} onChange={(e) => {
+          const selected = unitPicker.options.find(({ unit }) => unit.id === e.target.value)?.unit;
+          unitPicker.select(selected);
+          setUseMeetings(Boolean(selected?.sacrament_meeting_time || selected?.council_meeting_time));
+        }}>
+          <option value="">Select a unit</option>
+          {unitPicker.options.map(({ unit, label }) => <option key={unit.id} value={unit.id}>{label}</option>)}
+        </select>
+      </label> : unit && <strong>{unit.name}</strong>}
       {building && <small><AddressLink address={formatBuildingAddress(building)} /></small>}
       {!editable && event && <p>Planned by {event.owner_email}</p>}
       {isDrive && <label>Trip label <span className="optional">optional</span>
@@ -141,15 +151,15 @@ export function VisitEditor({ entry, editable, building, parentUnit, eventScope,
           <span className="optional"> ({automaticMeetings.length > 1 ? "1 hour each" : "1 hour"})</span>
         </span>
       </label>}
-      {!useMeetings && <>
+      {!useMeetings && (unit || isDrive) && <>
         {!event && !isDrive && <label>Event type<select name="kind" defaultValue="visit">
           {Object.entries(visitLabels).filter(([value]) => value !== "drive").map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>}
-        <div className="visit-time-fields">
+        <div className="visit-time-fields" key={unit?.id}>
           <label>Start time<input type="time" name="start" required defaultValue={minuteToTime(initialStart)} disabled={!editable || busy} /></label>
           <label>End time<input type="time" name="end" required defaultValue={minuteToTime(initialEnd)} disabled={!editable || busy} /></label>
         </div>
-        <label className="check"><input type="checkbox" name="next_day" defaultChecked={initialEnd >= 1440} disabled={!editable || busy} />Ends the next day</label>
+        <label className="check" key={unit?.id && `${unit.id}-next-day`}><input type="checkbox" name="next_day" defaultChecked={initialEnd >= 1440} disabled={!editable || busy} />Ends the next day</label>
       </>}
       {!isDrive && (editable || event?.notes) && <label>Notes <span className="optional">optional</span>
         <textarea name="notes" rows={3} maxLength={4000} defaultValue={event?.notes ?? ""} readOnly={!editable} disabled={busy} />
@@ -161,7 +171,7 @@ export function VisitEditor({ entry, editable, building, parentUnit, eventScope,
           {confirmDelete ? "Confirm removal" : "Remove"}
         </button>}
         <button type="button" className="button" disabled={busy} onClick={close}>{editable ? "Cancel" : "Close"}</button>
-        {editable && <button className="button primary" disabled={busy}>{busy ? "Saving…" : isDrive ? "Save driving block" : "Save visit"}</button>}
+        {editable && <button className="button primary" disabled={busy || Boolean(unitPicker && !unit)}>{busy ? "Saving…" : isDrive ? "Save driving block" : "Save visit"}</button>}
       </div>
     </form>
   </Modal>;

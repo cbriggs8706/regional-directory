@@ -1,13 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { buildingPhotoMaxBytes, buildingPhotoTypes, callingLevels, childUnitEntry, normalizeEmail, unitLabels, type Building } from "../lib/directory";
 import { focusTypes } from "../lib/focus-people";
 import { languageColors } from "../lib/language-colors";
-import { createDirectoryClient, getViewer } from "../lib/supabase";
+import { createDirectoryClient, getViewer, previewCookie } from "../lib/supabase";
 import { standardCallingGroups, standardGroupFor, standardRoleIndex, type StandardCalling } from "../lib/standard-callings";
 
 export async function signIn() {
@@ -25,6 +26,7 @@ export async function signIn() {
 export async function signOut() {
   const client = await createDirectoryClient();
   await client?.auth.signOut({ scope: "local" });
+  (await cookies()).delete(previewCookie);
   redirect("/");
 }
 
@@ -125,7 +127,7 @@ function revalidateDirectory() {
 }
 
 export async function saveContactDetails(id: string, values: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   if (!uuid.safeParse(id).success) return { error: "Invalid contact." };
 
@@ -141,10 +143,12 @@ export async function saveContactDetails(id: string, values: unknown) {
   return { error: null };
 }
 
-export async function saveRecord(resource: Exclude<Resource, "buildings">, id: string | null, values: unknown) {
-  const viewer = await getViewer();
+export async function saveRecord(resource: Resource, id: string | null, values: unknown) {
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
-  if (!Object.hasOwn(schemas, resource)) return { error: "Unknown record type." };
+  if (!Object.hasOwn(schemas, resource) || resource === "buildings" || resource === "directory_access") {
+    return { error: "Unknown record type." };
+  }
   const parsed = schemas[resource].safeParse(values);
   if (!parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "website_url")) {
     return { error: "Enter a website URL that starts with http:// or https://." };
@@ -161,18 +165,11 @@ export async function saveRecord(resource: Exclude<Resource, "buildings">, id: s
       ? "Check the names, ward or branch, email address, and Date Baptized. Use digits for the helper number and letters or digits for the PID."
       : "Check the required fields, dates, times, and email address." };
 
-  let error;
-  if (resource === "directory_access") {
-    if (viewer.role !== "admin" || id) return { error: "Only the administrator can grant access." };
-    ({ error } = await viewer.client.from(resource).insert(parsed.data));
-  } else {
-    if (id !== null && !uuid.safeParse(id).success) return { error: "Invalid record." };
-    const table = viewer.client.from(resource);
-    const result = id
-      ? await table.update(parsed.data).eq("id", id).select("id").single()
-      : await table.insert(parsed.data).select("id").single();
-    ({ error } = result);
-  }
+  if (id !== null && !uuid.safeParse(id).success) return { error: "Invalid record." };
+  const table = viewer.client.from(resource);
+  const { error } = id
+    ? await table.update(parsed.data).eq("id", id).select("id").single()
+    : await table.insert(parsed.data).select("id").single();
   if (resource === "contacts" && (error?.code === "PGRST204" || error?.code === "42703")) {
     return { error: error.message.includes("home_ward_id")
       ? "Apply the Home Ward migration in Supabase to save this person."
@@ -194,7 +191,7 @@ export async function saveRecord(resource: Exclude<Resource, "buildings">, id: s
 }
 
 export async function saveBuilding(id: string | null, form: FormData) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   if (id !== null && !uuid.safeParse(id).success) return { error: "Invalid building." };
 
@@ -295,7 +292,7 @@ async function ensureStandardCalling(client: NonNullable<Awaited<ReturnType<type
 }
 
 export async function addCallingHolder(values: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const holder = newHolderSchema.safeParse(values);
   if (!holder.success) return { error: "Check the person’s name, contact information, and assignment dates." };
@@ -317,7 +314,7 @@ export async function addCallingHolder(values: unknown) {
 const schedulerAssignmentSchema = z.object({ assignment_id: uuid, ...assignmentDetails, building_ids: buildingIds });
 
 export async function saveSchedulerAssignment(values: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = schedulerAssignmentSchema.safeParse(values);
   if (!parsed.success) return { error: "Check the buildings and assignment dates." };
@@ -333,7 +330,7 @@ export async function saveSchedulerAssignment(values: unknown) {
 const callingOrderSchema = z.object({ organization: uuid, ordered_ids: z.array(uuid).min(1) });
 
 export async function saveCallingOrder(organizationId: string, ids: string[]) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = callingOrderSchema.safeParse({ organization: organizationId, ordered_ids: ids });
   if (!parsed.success) return { error: "Could not read the calling order." };
@@ -344,7 +341,7 @@ export async function saveCallingOrder(organizationId: string, ids: string[]) {
 }
 
 export async function addChildUnits(parentId: string, parentKind: keyof typeof childUnitEntry, form: FormData) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   if (!uuid.safeParse(parentId).success || !Object.hasOwn(childUnitEntry, parentKind)) {
     return { error: "Choose a valid parent unit." };
@@ -388,7 +385,7 @@ export async function addChildUnits(parentId: string, parentKind: keyof typeof c
 }
 
 export async function deleteRecord(resource: Resource, id: string) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   if (!Object.hasOwn(schemas, resource)) return { error: "Unknown record type." };
   if (resource === "directory_access" && viewer.role !== "admin") {
@@ -434,7 +431,7 @@ const batchSize = 100;
 
 export async function sendEmail(input: unknown): Promise<SendResult> {
   const fail = (error: string): SendResult => ({ sent: 0, total: 0, error, saved: false });
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return fail("You need approved directory access.");
   const key = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM;
@@ -493,6 +490,9 @@ export async function sendEmail(input: unknown): Promise<SendResult> {
     const index = start / batchSize;
     if (completed.has(index)) continue;
     const addresses = dispatch.recipients.slice(start, start + batchSize);
+    const { data: eligible, error: accessError } = await viewer.client.rpc("directory_can_email", { recipient_addresses: addresses });
+    if (accessError) return result("Could not verify recipient access. Try again.");
+    if (!eligible) return result("A recipient is no longer available in your directory.");
     try {
       const response = await fetch("https://api.resend.com/emails/batch", {
         method: "POST",

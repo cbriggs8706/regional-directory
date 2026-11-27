@@ -58,7 +58,7 @@ function refreshOrganizations() {
 }
 
 export async function saveOrganizationRecord(input: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = mutationSchema.safeParse(input);
   if (!parsed.success) {
@@ -130,7 +130,7 @@ export async function saveOrganizationRecord(input: unknown) {
 }
 
 export async function removeOrganizationRecord(input: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = removalSchema.safeParse(input);
   if (!parsed.success) return { error: "This record is unavailable." };
@@ -156,7 +156,7 @@ export async function removeOrganizationRecord(input: unknown) {
 }
 
 export async function saveOrganizationTitleOrder(organization: string, ids: string[]) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = titleOrderSchema.safeParse({ organization, ordered_ids: ids });
   if (!parsed.success) return { error: "Could not read the assignment title order." };

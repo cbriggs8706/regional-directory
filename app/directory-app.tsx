@@ -1,5 +1,6 @@
 "use client";
 
+import { startAccessPreview } from "./access-actions";
 import { RouteLink } from "./route-navigation";
 import { useSearchParams } from "next/navigation";
 import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -14,7 +15,7 @@ import { OrganizationsView } from "./organizations-view";
 import { UnitPageContent } from "./unit-page-content";
 import { CallingGroups } from "./calling-groups";
 import { AssignmentBuildings } from "./assignment-buildings";
-import { VisitPlanner } from "./visit-planner";
+import { MyCalendar } from "./my-calendar";
 import { SharedCalendar } from "./shared-calendar";
 import { FamilyHistoryDashboard } from "./family-history-dashboard";
 import { ReportGenerator } from "./report-generator/report-generator";
@@ -38,7 +39,7 @@ const primarySections = [
 ] as const;
 const sections = [
   ...primarySections,
-  { id: "visits", label: "My Calendar", description: "Visit planner", Icon: CalendarDays },
+  { id: "visits", label: "My Calendar", description: "Your visits and private events", Icon: CalendarDays },
   { id: "callings", label: "Callings", Icon: Tags },
   { id: "access", label: "Admin", description: "Manage access", Icon: ShieldCheck },
 ] as const;
@@ -92,7 +93,12 @@ const callingFilterLevels = [
   { level: "region", label: "Regions" },
 ] as const;
 
-function CallingFilterMenu({ count, onClear, children }: {
+function PeopleFilterMenu({ name, emptyLabel, heading, subtitle, Icon, count, onClear, children }: {
+  name: string;
+  emptyLabel: string;
+  heading: string;
+  subtitle?: string;
+  Icon: typeof Filter;
   count: number;
   onClear: () => void;
   children: ReactNode;
@@ -118,23 +124,24 @@ function CallingFilterMenu({ count, onClear, children }: {
       toggle.current?.focus({ preventScroll: true });
     }
   }}>
-    <summary ref={toggle} className="button"><Filter size={16} aria-hidden />
-      {count ? `Callings & assignments (${count})` : "All callings & assignments"}
+    <summary ref={toggle} className="button"><Icon size={16} aria-hidden />
+      {count ? `${name} (${count})` : emptyLabel}
       <ChevronDown size={15} aria-hidden />
     </summary>
     <div className="filter-menu">
-      <div className="filter-menu-heading"><strong>Callings & assignments</strong>
+      <div className="filter-menu-heading"><strong>{heading}</strong>
         {count > 0 && <button className="text-button" onClick={onClear}>Clear</button>}
       </div>
+      {subtitle && <p className="field-help">{subtitle}</p>}
       <div className="filter-menu-options">{children}</div>
     </div>
   </details>;
 }
 
-export function DirectoryApp({ unitId, managementSection, directory, admin, email, userId, mailReady, pending, familyHistory, currentMonth, unitData, journalReport, organizationsPage, organizationDirectory, organizationDetail }: {
+export function DirectoryApp({ unitId, managementSection, directory, admin, email, userId, preview, mailReady, pending, familyHistory, currentMonth, unitData, journalReport, organizationsPage, organizationDirectory, organizationDetail }: {
   unitId?: string; managementSection?: DirectoryManagementSection;
   organizationsPage?: boolean; organizationDirectory: OrganizationDirectory; organizationDetail: OrganizationDetail | null;
-  directory: Directory; admin: boolean; email: string; userId: string; mailReady: boolean; pending: Pending[];
+  directory: Directory; admin: boolean; email: string; userId: string; preview: boolean; mailReady: boolean; pending: Pending[];
   familyHistory: FamilyHistoryLoad | null;
   currentMonth: string;
   journalReport: { month: string; data: Promise<JournalReportData> } | null;
@@ -152,6 +159,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
   const [search, setSearch] = useState("");
   const [focusFilter, setFocusFilter] = useState<FocusType | "">("");
   const [callingFilter, setCallingFilter] = useState<string[]>([]);
+  const [organizationTitleFilter, setOrganizationTitleFilter] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [unitFilter, setUnitFilter] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -170,8 +178,12 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
   const positions = new Map(directory.positions.map((position) => [position.id, position]));
   const active = new Map<string, Assignment[]>();
   const assignmentsByPosition = new Map<string, Assignment[]>();
+  const councilCallingContacts = new Set<string>();
+  const regionalCallingContacts = new Set<string>();
   for (const assignment of directory.assignments) {
     const position = positions.get(assignment.position_id);
+    const unit = position && units.get(position.unit_id);
+    if (unit) (unit.kind === "region" ? regionalCallingContacts : councilCallingContacts).add(assignment.contact_id);
     const history = assignmentsByPosition.get(assignment.position_id) ?? [];
     history.push(assignment);
     assignmentsByPosition.set(assignment.position_id, history);
@@ -181,17 +193,23 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
       active.set(assignment.contact_id, assignments);
     }
   }
-  const organizationNames = new Map(organizationDirectory.organizations.map((organization) => [organization.id, organization.name]));
+  const organizations = new Map(organizationDirectory.organizations.map((organization) => [organization.id, organization]));
+  const organizationTitleLabel = (title: OrganizationDirectory["titles"][number], organizationName: string) =>
+    `${title.name} • ${organizationName}`;
+  const organizationOptions = organizationDirectory.titles.flatMap((title) => {
+    const organization = organizations.get(title.organization_id);
+    return organization ? [{ id: title.id, label: organizationTitleLabel(title, organization.name) }] : [];
+  }).sort((a, b) => a.label.localeCompare(b.label));
   const organizationTitles = new Map(organizationDirectory.titles.map((title) => [title.id, title]));
-  const personOrganizations = new Map<string, { id: string; organizationId: string; label: string; active: boolean }[]>();
+  const personOrganizations = new Map<string, { id: string; titleId: string; organizationId: string; agentId: string; label: string; active: boolean }[]>();
   for (const assignment of organizationDirectory.assignments) {
     const title = organizationTitles.get(assignment.title_id);
-    const organizationName = title && organizationNames.get(title.organization_id);
-    if (!title || !organizationName) continue;
+    const organization = title && organizations.get(title.organization_id);
+    if (!title || !organization) continue;
     const records = personOrganizations.get(assignment.contact_id) ?? [];
     records.push({
-      id: assignment.id, organizationId: title.organization_id,
-      label: `${title.name} • ${organizationName}`, active: assignment.active,
+      id: assignment.id, titleId: title.id, organizationId: organization.id, agentId: organization.agent_id,
+      label: organizationTitleLabel(title, organization.name), active: assignment.active,
     });
     personOrganizations.set(assignment.contact_id, records);
   }
@@ -205,7 +223,16 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
     }
   }
   const sortedTags = [...tags].sort((a, b) => a.localeCompare(b));
-  const sortedPeople = [...directory.contacts].sort((a, b) => a.name.localeCompare(b.name));
+  function canEditPerson(person: Contact) {
+    if (admin) return true;
+    if (person.focus_type) return units.has(person.ward_id ?? "");
+    return units.has(person.home_ward_id ?? "") || councilCallingContacts.has(person.id)
+      || Boolean(personOrganizations.get(person.id)?.some(({ agentId }) => units.has(agentId) && units.get(agentId)?.kind !== "region"));
+  }
+
+  const sortedPeople = directory.contacts.filter((person) =>
+    canEditPerson(person) || (!person.focus_type && regionalCallingContacts.has(person.id)))
+    .sort((a, b) => a.name.localeCompare(b.name));
   const scopedUnitIds = new Set<string>();
   if (unitFilter) {
     for (const unit of directory.units) {
@@ -213,15 +240,21 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
     }
   }
   const needle = search.trim().toLowerCase();
+  const roleFilterCount = callingFilter.length + organizationTitleFilter.length;
   const visible = sortedPeople.filter((person) => {
     if (needle && ![person.name, person.email, person.phone].some((value) => value?.toLowerCase().includes(needle))) return false;
     if (focusFilter) return person.focus_type === focusFilter && (!unitFilter || scopedUnitIds.has(person.ward_id ?? ""));
-    if (!unitFilter && !callingFilter.length && !tagFilter.length) return true;
-    if (person.focus_type) return !callingFilter.length && !tagFilter.length && scopedUnitIds.has(person.ward_id ?? "");
+    if (!unitFilter && !roleFilterCount && !tagFilter.length) return true;
+    const matchesOrganizationRole = personOrganizations.get(person.id)?.some((assignment) =>
+      assignment.active && (!unitFilter || scopedUnitIds.has(assignment.agentId))
+      && (!roleFilterCount || organizationTitleFilter.includes(assignment.titleId)));
+    if (matchesOrganizationRole && !tagFilter.length) return true;
+    if (person.focus_type) return !roleFilterCount && !tagFilter.length && scopedUnitIds.has(person.ward_id ?? "");
+    if (!roleFilterCount && !tagFilter.length && scopedUnitIds.has(person.home_ward_id ?? "")) return true;
     return active.get(person.id)?.some((assignment) => {
       const position = positions.get(assignment.position_id);
       return position && (!unitFilter || scopedUnitIds.has(position.unit_id))
-        && (!callingFilter.length || callingFilter.includes(position.calling_type_id))
+        && (!roleFilterCount || callingFilter.includes(position.calling_type_id) || matchesOrganizationRole)
         && (!tagFilter.length || assignment.assignment_labels.some((label) => tagFilter.includes(label)));
     });
   });
@@ -313,7 +346,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
 
         {tab === "dashboard" && familyHistory && <PendingContent data={familyHistory}
           fallback={<SectionSkeleton label="Family History reports" chart />}>
-          {(reports) => <FamilyHistoryDashboard units={directory.units} {...reports} currentMonth={currentMonth} addHost={addHost} />}
+          {(reports) => <FamilyHistoryDashboard councilScope={!admin} units={directory.units} {...reports} currentMonth={currentMonth} addHost={addHost} />}
         </PendingContent>}
 
         {tab === "people" && <section className="people-section" aria-labelledby="people-heading">
@@ -335,10 +368,11 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
               <select aria-label="Filter by unit" value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
                 <PeopleUnitOptions units={units} />
               </select>
-              {!focusFilter && <CallingFilterMenu count={callingFilter.length + tagFilter.length} onClear={() => {
-                setCallingFilter([]);
-                setTagFilter([]);
-              }}>
+              {!focusFilter && <PeopleFilterMenu name="Callings" emptyLabel="All callings" heading="Callings & organization assignments"
+                Icon={Filter} count={roleFilterCount} onClear={() => {
+                  setCallingFilter([]);
+                  setOrganizationTitleFilter([]);
+                }}>
                 {sortedTypes.length ? callingFilterLevels.map(({ level, label }) => {
                   const callings = sortedTypes.filter((type) => type.level === level);
                   if (!callings.length) return null;
@@ -354,16 +388,25 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
                   </details>;
                 }) : <p className="muted">No callings yet.</p>}
                 <details className="calling-filter-group">
-                  <summary><ChevronDown size={15} aria-hidden />Assignment tags</summary>
+                  <summary><ChevronDown size={15} aria-hidden />Organization assignments</summary>
                   <div className="calling-filter-group-options">
-                    {sortedTags.length ? sortedTags.map((tag) => <label className="check" key={tag}>
-                      <input type="checkbox" checked={tagFilter.includes(tag)} onChange={(event) =>
-                        setTagFilter((prev) => event.target.checked ? [...prev, tag] : prev.filter((label) => label !== tag))} />
-                      <span>{tag}</span>
-                    </label>) : <p className="muted">No assignment tags on current callings.</p>}
+                    {organizationOptions.length ? organizationOptions.map(({ id, label }) => <label className="check" key={id}>
+                      <input type="checkbox" checked={organizationTitleFilter.includes(id)} onChange={(event) =>
+                        setOrganizationTitleFilter((prev) => event.target.checked ? [...prev, id] : prev.filter((value) => value !== id))} />
+                      <span>{label}</span>
+                    </label>) : <p className="muted">No organization assignment titles yet.</p>}
                   </div>
                 </details>
-              </CallingFilterMenu>}
+              </PeopleFilterMenu>}
+              {!focusFilter && <PeopleFilterMenu name="Leader Assignments" emptyLabel="All Leader Assignments" heading="Leader Assignments"
+                subtitle="Counselors that have assignments in the following"
+                Icon={Tags} count={tagFilter.length} onClear={() => setTagFilter([])}>
+                {sortedTags.length ? sortedTags.map((tag) => <label className="check" key={tag}>
+                  <input type="checkbox" checked={tagFilter.includes(tag)} onChange={(event) =>
+                    setTagFilter((prev) => event.target.checked ? [...prev, tag] : prev.filter((label) => label !== tag))} />
+                  <span>{tag}</span>
+                </label>) : <p className="muted">No leader assignments on current callings.</p>}
+              </PeopleFilterMenu>}
             </div>
             <div className="list-heading">
               <span>{visible.length} {visible.length === 1 ? "contact" : "contacts"}</span>
@@ -374,13 +417,15 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
             </div>
             {visible.length === 0 ? (
               <div className="empty"><span><Users size={25} aria-hidden /></span>
-                <h2>{directory.contacts.length ? "No matching contacts" : "No contacts yet"}</h2>
-                <p>{directory.contacts.length ? "Try another search or clear a filter." : "Add a contact to start your directory."}</p>
+                <h2>{sortedPeople.length ? "No matching contacts" : "No contacts yet"}</h2>
+                <p>{sortedPeople.length ? "Try another search or clear a filter."
+                  : admin ? "Add a contact to start your directory."
+                  : "People with regional callings or links to your coordinating councils appear here."}</p>
               </div>
             ) : (
               <ul className="contact-list">
                 {visible.map((person) => (
-                  <PersonCard key={person.id} person={person} className={selected.has(person.id) ? "selected" : undefined}>
+                  <PersonCard key={person.id} person={person} canEdit={canEditPerson(person)} className={selected.has(person.id) ? "selected" : undefined}>
                     <label className="contact-check">
                       <input type="checkbox" aria-label={`Select ${person.name}`}
                         checked={selected.has(person.id)}
@@ -425,9 +470,9 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
                           </RouteLink>)}
                       </div>
                     </div>
-                    <button className="icon-button" aria-label={`Edit ${person.name}`} onClick={() => setEditor({ resource: "contacts", row: person })}>
+                    {canEditPerson(person) && <button className="icon-button" aria-label={`Edit ${person.name}`} onClick={() => setEditor({ resource: "contacts", row: person })}>
                       <Pencil size={17} />
-                    </button>
+                    </button>}
                   </PersonCard>
                 ))}
               </ul>
@@ -522,7 +567,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
           ? <UnitPageContent key={detailUnit.id} unit={detailUnit} directory={directory} edit={setEditor} data={unitData}
               currentMonth={currentMonth} userId={userId} addHost={addHost} admin={admin}
               organizationDirectory={organizationDirectory} />
-          : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} directory={directory}
+          : <UnitsView key={browseUnitId} browseUnitId={browseUnitId} directory={directory} councilScope={!admin}
               organizationDirectory={organizationDirectory} />)}
 
         {tab === "organizations" && <OrganizationsView key={organizationDetail?.organization.id ?? "list"}
@@ -533,22 +578,35 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
 
         {tab === "calendar" && <SharedCalendar units={directory.units} stakeConferences={directory.stake_conferences}
           organizations={organizationDirectory.organizations} addHost={addHost} />}
-        {tab === "visits" && <VisitPlanner directory={directory} userId={userId} />}
+        {tab === "visits" && <MyCalendar directory={directory} addHost={addHost} />}
 
         {tab === "access" && admin && <section aria-labelledby="access-heading">
-          <div className="section-heading"><div><h1 id="access-heading">Access</h1><p>Manage which Google accounts can use the directory.</p></div>
+          <div className="section-heading"><div><h1 id="access-heading">Access</h1><p>Assign coordinating councils to Google accounts.</p></div>
             <button className="button primary" onClick={() => setEditor({ resource: "directory_access" })}><Plus size={18} aria-hidden />Grant access</button></div>
           <div className="panel"><ul className="management-list">
-            {directory.directory_access.map((entry) => <li key={entry.email}>
-              <div><strong>{entry.email}</strong><small>{entry.is_admin ? "Administrator" : "Directory member"}</small></div>
-              {!entry.is_admin && <button className="button" onClick={() => setEditor({ resource: "directory_access", revoke: entry.email })}>Revoke</button>}
-            </li>)}
+            {directory.directory_access.map((entry) => {
+              const councilNames = entry.directory_access_councils.flatMap(({ council_id }) => units.get(council_id)?.name ?? [])
+                .sort((a, b) => a.localeCompare(b));
+              return <li key={entry.email}>
+                <div><strong>{entry.email}</strong>
+                  <small>{entry.is_admin ? "Administrator · All councils" : councilNames.join(", ") || "No councils assigned"}</small>
+                </div>
+                {!entry.is_admin && <div className="access-actions">
+                  <button className="button" onClick={() => setEditor({ resource: "directory_access", member: entry })}>Edit councils</button>
+                  <form action={startAccessPreview}>
+                    <input type="hidden" name="email" value={entry.email} />
+                    <button className="button" type="submit">View as user</button>
+                  </form>
+                  <button className="button" onClick={() => setEditor({ resource: "directory_access", revoke: entry.email })}>Revoke</button>
+                </div>}
+              </li>;
+            })}
           </ul></div>
         </section>}
       </main>
       </div>
 
-      <footer className="directory-footer" ref={detailUnit || tab === "dashboard" || tab === "people" || tab === "calendar" || managementSection || organizationsPage ? setAddHost : undefined}>
+      <footer className="directory-footer" ref={!preview && (detailUnit || tab === "dashboard" || tab === "people" || tab === "calendar" || tab === "visits" || managementSection || organizationsPage) ? setAddHost : undefined}>
         {selectedPeople.length > 0 && <aside className="selection-bar" aria-label="Contact selection">
           <div className="shell selection-inner">
             <div className="selection-summary">
@@ -599,7 +657,7 @@ export function DirectoryApp({ unitId, managementSection, directory, admin, emai
           </label>
         </div>
       </Modal>}
-      {editor && <Editor state={editor} directory={directory} close={() => setEditor(null)} />}
+      {editor && <Editor state={editor} directory={directory} admin={admin} close={() => setEditor(null)} />}
       {compose && <Compose contacts={emailRecipients} pending={pendingMail} ready={mailReady} count={recipientCount}
         close={(clearSelection) => {
           setCompose(false);

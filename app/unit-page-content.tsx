@@ -56,6 +56,7 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
   const isStake = unit.kind === "stake";
   const isWardOrBranch = hasSacramentMeeting(unit.kind);
   const isArea = unit.kind === "region";
+  const isMemberArea = isArea && !admin;
   const isHigherUnit = isArea || unit.kind === "council";
   const sectionLabels = {
     overview: "Overview",
@@ -66,9 +67,9 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
     focus: "Focus People",
     stewardships: "Stewardships",
   };
-  const sections = unitSections.filter((id) => (id !== "focus" || isWardOrBranch) && (id !== "units" || !isWardOrBranch) &&
+  const sections = isMemberArea ? (["reports", "get-involved", "units", "callings"] as const) : unitSections.filter((id) => (id !== "focus" || isWardOrBranch) && (id !== "units" || !isWardOrBranch) &&
     (id !== "stewardships" || isOrganizationAgent(unit.kind)));
-  const sectionNavigation = usePageSection(`/units/${unit.id}`, sections, defaultSection);
+  const sectionNavigation = usePageSection<(typeof unitSections)[number]>(`/units/${unit.id}`, sections, isMemberArea ? "reports" : defaultSection);
   const { section, showSection } = sectionNavigation;
   const building = directory.buildings.find(({ id }) => id === unit.building_id);
   const languagesById = new Map(directory.languages.map((language) => [language.id, language]));
@@ -143,7 +144,7 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
     <BuildingPageHeader name={unitNameWithType(unit)} recordLabel="Unit" building={building} website={unit.website_url}
       socialLinks={unitFacebookUrls(unit).map((url) => ({ channel: "facebook", url }))}
       facts={<UnitFacts unit={unit} languagesById={languagesById} />}
-      edit={() => edit({ resource: "units", row: unit })} />
+      edit={isMemberArea ? undefined : () => edit({ resource: "units", row: unit })} />
     <PageSectionTabs label="Unit sections" sections={sections} labels={sectionLabels} {...sectionNavigation} />
     {section === "callings" && <UnitCallings unit={unit} directory={directory} edit={edit} title={sectionLabels.callings} admin={admin} />}
     {section === "stewardships" && <section className="unit-tab-section" aria-labelledby="stewardships-heading">
@@ -181,7 +182,8 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
               </span>
             </RouteLink>
           </li>)}
-        </ul> : <p className="panel empty">{isArea ? "This region has no coordinating councils yet." : "This coordinating council has no stakes yet."}</p>}
+        </ul> : <p className="panel empty">{isMemberArea ? "You have no coordinating councils assigned in this area."
+          : isArea ? "This region has no coordinating councils yet." : "This coordinating council has no stakes yet."}</p>}
       </section>)}
     {section === "overview" && <section className="unit-tab-section" aria-labelledby="unit-overview-heading">
       <UnitSectionHeading id="unit-overview-heading" title="Overview" unit={unit} />
@@ -198,7 +200,7 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
       {unit.notes && <section className="panel unit-page-notes"><h2>Notes</h2><p className="unit-notes">{unit.notes}</p></section>}
     </section>}
     <AddMenu host={addHost} label="Add to unit" actions={[
-      { label: "New journal entry", Icon: BookOpen, availableWhen: data.canAddJournal, run: () => openEntry("journal", "overview") },
+      { label: "New journal entry", Icon: BookOpen, hidden: isMemberArea, availableWhen: data.canAddJournal, run: () => openEntry("journal", "overview") },
       { label: "Add focus person", Icon: UserPlus, hidden: !isWardOrBranch, run: () => {
         showSection("focus");
         edit({ resource: "contacts", ward: unit });
@@ -211,7 +213,7 @@ export function UnitPageContent({ unit, directory, edit, data, currentMonth, use
         showSection("overview");
         edit({ resource: isStake ? "stake_conferences" : "ward_conferences", unit });
       } },
-      { label: "Schedule a visit", Icon: Clock3, run: () => {
+      { label: "Schedule a visit", Icon: Clock3, hidden: isMemberArea, run: () => {
         showSection("overview");
         setVisitStatus("");
         setVisitEditor({ unit, day: todayInVisitZone() });

@@ -68,7 +68,7 @@ export async function loadUnitDateEvents(unitIds: string[], day: string): Promis
 }
 
 export async function scheduleVisit(unitId: string, day: string, notes?: string | null) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: accessError, added: 0 };
   if (!uuid.safeParse(unitId).success || !date.safeParse(day).success) {
     return { error: "Choose a unit and a valid date.", added: 0 };
@@ -95,7 +95,7 @@ const visitSchema = z.object({
   .refine((event) => event.kind === "drive" ? event.unit_id === null : event.unit_id !== null && !event.title);
 
 export async function saveVisit(values: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: accessError };
   const parsed = visitSchema.safeParse(values);
   if (!parsed.success) return { error: "Choose a date and an end time after the start time." };
@@ -111,7 +111,7 @@ export async function saveVisit(values: unknown) {
 }
 
 export async function deleteVisit(id: string) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: accessError };
   if (!uuid.safeParse(id).success) return { error: "Could not find this visit." };
   const { data, error } = await viewer.client.from("visit_events").delete().eq("id", id)

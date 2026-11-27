@@ -34,7 +34,7 @@ const reportSchema = z.object({
 });
 
 export async function saveFamilyHistoryReport(input: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = reportSchema.safeParse(input);
   if (!parsed.success) return { error: "Choose a ward or branch and month. Enter whole member counts and percentages between 0 and 100." };
@@ -76,7 +76,7 @@ export async function saveFamilyHistoryReport(input: unknown) {
 }
 
 export async function saveSubmitterHistory(input: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = submitterHistorySchema.safeParse(input);
   if (!parsed.success) return { error: "Choose a ward or branch and enter whole submitter counts for valid months." };
@@ -100,7 +100,7 @@ export async function saveSubmitterHistory(input: unknown) {
 }
 
 export async function saveGetInvolvedReport(input: unknown) {
-  const viewer = await getViewer();
+  const viewer = await getViewer({ write: true });
   if (!viewer?.role) return { error: "You need approved directory access." };
   const parsed = getInvolvedSchema.safeParse(input);
   if (!parsed.success) return { error: "Choose a ward or branch and a month, and enter whole counts." };

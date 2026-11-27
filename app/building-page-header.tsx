@@ -24,7 +24,7 @@ export function BuildingPageHeader({ name, recordLabel, building, website, socia
   socialLinks?: SocialLink[];
   facts: ReactNode;
   children?: ReactNode;
-  edit: () => void;
+  edit?: () => void;
 }) {
   const [showPhoto, setShowPhoto] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -52,8 +52,8 @@ export function BuildingPageHeader({ name, recordLabel, building, website, socia
       <div className={socialLinks.length > 1 ? "unit-heading-row unit-heading-row-wrap" : "unit-heading-row"}>
         <h1 ref={heading} tabIndex={-1}>{name}</h1>
         <div className="unit-heading-actions">
-          <button type="button" className="icon-button" aria-label={`Edit ${name}`} title={`Edit ${recordLabel.toLowerCase()}`}
-            onClick={edit}><Pencil size={18} aria-hidden /></button>
+          {edit && <button type="button" className="icon-button" aria-label={`Edit ${name}`} title={`Edit ${recordLabel.toLowerCase()}`}
+            onClick={edit}><Pencil size={18} aria-hidden /></button>}
           {website && <a className="icon-button" href={website} target="_blank" rel="noopener noreferrer"
             aria-label={`${recordLabel} website`} title={`${recordLabel} website`}><Globe size={19} aria-hidden /></a>}
           {socialLinks.map(({ channel, url }, index) => {

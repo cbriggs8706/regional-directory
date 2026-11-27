@@ -190,7 +190,7 @@ export async function DirectoryPage({ viewer, unitId, journalPage, managementSec
   organizationsPage?: boolean;
   organizationId?: string;
 }) {
-  const { client, role, user } = viewer;
+  const { client, role, user, previewEmail } = viewer;
   const tables = ["units", "buildings", "stake_conferences", "languages", "contacts", "organizations", "calling_types", "calling_names", "positions", "assignments"] as const;
   const directoryRows = tables.map(async (table) => {
     const records: object[] = [];
@@ -209,7 +209,7 @@ export async function DirectoryPage({ viewer, unitId, journalPage, managementSec
   const [organizationDirectory, entries, access, recent] = await Promise.all([
     loadOrganizations(client),
     Promise.all(directoryRows),
-    role === "admin" ? client.from("directory_access").select("email,is_admin").order("email") : null,
+    role === "admin" ? client.from("directory_access").select("email,is_admin,directory_access_councils(council_id)").order("email") : null,
     client.from("email_dispatches")
       .select("id,created_at,subject,recipients,accepted_batches")
       .gt("created_at", new Date(Date.now() - 23 * 60 * 60 * 1000).toISOString())
@@ -245,11 +245,11 @@ export async function DirectoryPage({ viewer, unitId, journalPage, managementSec
   const journalReport = reportMonth
     ? { month: reportMonth, data: loadJournalReport(viewer, reportMonth, units, organizationDirectory.organizations) } : null;
 
-  return <DirectoryApp organizationsPage={organizationsPage} organizationDirectory={organizationDirectory} organizationDetail={organizationDetail}
+  return <DirectoryApp key={previewEmail ?? user.id} organizationsPage={organizationsPage} organizationDirectory={organizationDirectory} organizationDetail={organizationDetail}
     unitId={unitId} managementSection={managementSection} directory={directory}
     familyHistory={familyHistory} currentMonth={currentMonth} admin={role === "admin"} email={user.email ?? ""}
-    userId={user.id} unitData={unitData} journalReport={journalReport}
-    mailReady={Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM)} pending={pending} />;
+    userId={user.id} preview={Boolean(previewEmail)} unitData={unitData} journalReport={journalReport}
+    mailReady={Boolean(!previewEmail && process.env.RESEND_API_KEY && process.env.RESEND_FROM)} pending={pending} />;
 }
 
 export type FamilyHistoryLoad = ReturnType<typeof loadUnitReports<"family_history_reports">>;

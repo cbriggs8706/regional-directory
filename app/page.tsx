@@ -23,8 +23,12 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ a
           <div className="brand-icon"><BookOpen size={23} aria-hidden /></div>
           <div className="sign-in-label"><LockKeyhole size={14} aria-hidden /> Private directory</div>
           <h1>Regional Directory</h1>
-          <p>{viewer ? "Your Google account hasn’t been granted access. Contact the directory administrator."
-            : "Sign in with your approved Google account to view callings and contacts."}</p>
+          {viewer?.accessError ? <p className="notice error" role="alert">
+            {viewer.accessError === "migration"
+              ? "The council access update is required. Apply migration 202611260040_council_access.sql in Supabase, then reload this page."
+              : "The directory could not verify your access. Reload this page to try again."}
+          </p> : <p>{viewer ? "Your Google account hasn’t been granted access. Contact the directory administrator."
+            : "Sign in with your approved Google account to view callings and contacts."}</p>}
           {!ready && <p className="notice">Supabase and Google sign-in setup is required. See the project README to get started.</p>}
           {auth && Object.hasOwn(authErrors, auth) && <p className="notice error" role="alert">{authErrors[auth]}</p>}
           <form action={viewer ? signOut : signIn}>

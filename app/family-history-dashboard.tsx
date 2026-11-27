@@ -18,8 +18,11 @@ const previousYearColor = "#bbb7b2";
 const olderYearColor = "#dcdcdc";
 const compareColors = ["#78529a", "#967bb0", "#b19ac6"];
 
-function UnitOptions({ stakes, wards, unitNames }: { stakes: Unit[]; wards: Unit[]; unitNames: Map<string, string> }) {
+function UnitOptions({ councils = [], stakes, wards, unitNames }: { councils?: Unit[]; stakes: Unit[]; wards: Unit[]; unitNames: Map<string, string> }) {
   return <>
+    {councils.length > 0 && <optgroup label="Coordinating councils">
+      {councils.map(({ id, name }) => <option key={id} value={id}>{name}</option>)}
+    </optgroup>}
     {stakes.length > 0 && <optgroup label="Stakes">
       {stakes.map(({ id, name }) => <option key={id} value={id}>{name}</option>)}
     </optgroup>}
@@ -73,7 +76,7 @@ function ReportCoverageList({ wards, directory, month, reports }: {
   </div>;
 }
 
-export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError, fixedUnit, comparisonUnits, viewControls, entryDialog, historyDialog, addHost }: {
+export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError, fixedUnit, comparisonUnits, viewControls, entryDialog, historyDialog, addHost, councilScope = false }: {
   units: Unit[];
   reports: FamilyHistoryReport[];
   currentMonth: string;
@@ -84,6 +87,7 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   entryDialog?: { open: boolean; close: () => void };
   historyDialog?: { open: boolean; close: () => void };
   addHost?: HTMLElement | null;
+  councilScope?: boolean;
 }) {
   const [scopeId, setScope] = useState("");
   const [compareId, setCompare] = useState("");
@@ -96,6 +100,8 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   const [status, setStatus] = useState("");
   const sorted = [...units].sort((a, b) => a.name.localeCompare(b.name));
   const wards = reportUnits(sorted);
+  const councils = sorted.filter(({ kind }) => kind === "council");
+  const regionalLabel = councilScope ? "My coordinating councils" : "Regional overview";
   const stakes = sorted.filter(({ kind }) => kind === "stake");
   const directory = new Map(sorted.map((unit) => [unit.id, unit]));
   const unitNames = new Map(wards.map(({ id, parent_id, name }) => {
@@ -111,10 +117,10 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
   const closeHistory = historyDialog?.close ?? (() => setHistoryOpen(false));
   const compareWards = comparison ? scopeWards(sorted, comparison) : [];
   const isWard = scope?.level === "ward";
-  const alternatives = fixedUnit ? [] : (scope?.kind === "stake" ? stakes : isWard ? wards : []).filter(({ id }) => id !== scopeId);
+  const alternatives = fixedUnit ? [] : (scope?.kind === "council" ? councils : scope?.kind === "stake" ? stakes : isWard ? wards : []).filter(({ id }) => id !== scopeId);
   const reportIndex = new Map(reports.map((report) => [`${report.unit_id}/${report.report_month.slice(0, 7)}`, report]));
   const scopeUnitIds = new Set([...inScope, ...compareWards].map(({ id }) => id));
-  const childUnits = scope ? sorted.filter(({ parent_id }) => parent_id === scope.id) : stakes;
+  const childUnits = scope ? sorted.filter(({ parent_id }) => parent_id === scope.id) : councilScope ? councils : stakes;
   const savedMonths = [...new Set(reports.filter(({ unit_id }) => scopeUnitIds.has(unit_id))
     .map(({ report_month }) => report_month.slice(0, 7)))].sort().reverse();
   const currentYear = currentMonth.slice(0, 4);
@@ -136,7 +142,7 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
     return { summary: reportSummary(found, eligible.length, target?.level === "ward"), filed: found.length, total: eligible.length };
   }
 
-  const label = (target: Unit | undefined) => target ? unitNames.get(target.id) ?? target.name : "Regional overview";
+  const label = (target: Unit | undefined) => target ? unitNames.get(target.id) ?? target.name : regionalLabel;
   const reportsForMonth = readMonth(scope, month);
   const monthLabel = formatReportMonth(month);
   const coverageLabel = `${reportsForMonth.filed} of ${reportsForMonth.total} unit reports for ${monthLabel}`;
@@ -238,16 +244,16 @@ export function FamilyHistoryDashboard({ units, reports, currentMonth, loadError
             </select>
           </label>
           {viewControls}
-          {!fixedUnit && <label>Stake or ward/branch
+          {!fixedUnit && <label>{councilScope ? "Coordinating council, stake, or ward/branch" : "Stake or ward/branch"}
             <select value={scopeId} onChange={(event) => { setScope(event.target.value); setCompare(""); }}>
-              <option value="">Regional overview</option>
-              <UnitOptions stakes={stakes} wards={wards} unitNames={unitNames} />
+              <option value="">{regionalLabel}</option>
+              <UnitOptions councils={councilScope ? councils : []} stakes={stakes} wards={wards} unitNames={unitNames} />
             </select>
           </label>}
           {alternatives.length > 0 && <label>Compare with
             <select value={compareId} onChange={(event) => setCompare(event.target.value)}>
               <option value="">None</option>
-              <UnitOptions stakes={isWard ? [] : alternatives} wards={isWard ? alternatives : []} unitNames={unitNames} />
+              <UnitOptions councils={scope?.kind === "council" ? alternatives : []} stakes={scope?.kind === "stake" ? alternatives : []} wards={isWard ? alternatives : []} unitNames={unitNames} />
             </select>
           </label>}
         </div>

@@ -9,10 +9,11 @@ import { Modal } from "./editor";
 
 type CardContact = Pick<Contact, "id" | "name" | "phone" | "email">;
 
-export function PersonCard({ as: Element = "li", className, person, children }: {
+export function PersonCard({ as: Element = "li", className, person, children, canEdit = true }: {
   as?: "li" | "div";
   className?: string;
   person?: CardContact;
+  canEdit?: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -23,11 +24,11 @@ export function PersonCard({ as: Element = "li", className, person, children }: 
     <button type="button" className="person-card-trigger" aria-label={`Contact ${person.name}`}
       aria-haspopup="dialog" onClick={() => setOpen(true)} />
     {children}
-    {open && createPortal(<ContactMenu person={person} close={() => setOpen(false)} />, document.body)}
+    {open && createPortal(<ContactMenu person={person} canEdit={canEdit} close={() => setOpen(false)} />, document.body)}
   </Element>;
 }
 
-function ContactMenu({ person, close }: { person: CardContact; close: () => void }) {
+function ContactMenu({ person, canEdit, close }: { person: CardContact; canEdit: boolean; close: () => void }) {
   const [copyStatus, setCopyStatus] = useState<"copied" | "manual" | null>(null);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -78,7 +79,7 @@ function ContactMenu({ person, close }: { person: CardContact; close: () => void
   }
 
   return <Modal title={person.name} close={() => { if (!busy) close(); }} className="contact-menu">
-    {editing ? <form className="modal-body stack" onSubmit={submit}>
+    {canEdit && editing ? <form className="modal-body stack" onSubmit={submit}>
       <fieldset disabled={busy}>
         <label>Phone number
           <input name="phone" type="tel" autoComplete="tel" defaultValue={person.phone ?? ""} maxLength={50} autoFocus />
@@ -111,14 +112,14 @@ function ContactMenu({ person, close }: { person: CardContact; close: () => void
         }} onFocus={(event) => event.currentTarget.select()} />
       </label>}
       {saved && <p className="muted" role="status">Contact details saved.</p>}
-      <div className="contact-menu-actions">
+      {canEdit && <div className="contact-menu-actions">
         <button type="button" className="button" onClick={() => {
           setCopyStatus(null);
           setError("");
           setSaved(false);
           setEditing(true);
         }}><Pencil size={18} aria-hidden />Edit contact information</button>
-      </div>
+      </div>}
     </div>}
   </Modal>;
 }

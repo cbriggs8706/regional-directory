@@ -1,13 +1,14 @@
 "use client";
 
 import { useRef, useState, type ClipboardEvent, type FormEvent } from "react";
+import { saveCouncilAccess } from "./access-actions";
 import { Plus, X } from "lucide-react";
 import { focusTypes, focusTypeLabels, type FocusType } from "../lib/focus-people";
 import { addCallingHolder, addChildUnits, deleteRecord, saveBuilding, saveRecord, saveSchedulerAssignment, type Resource } from "./actions";
 import {
   formatBuildingAddress, groupBuildingsByCity,
   callingLevelLabel, callingLevels, callingPath, childUnitEntry, compareCallingOrder, hasSacramentMeeting, isBuildingScheduler, parentKinds, unitFacebookUrls, unitLabels, unitPath,
-  type Assignment, type Building, type CallingLevel, type CallingType, type Contact, type Directory, type Language, type Organization, type Position,
+  type Access, type Assignment, type Building, type CallingLevel, type CallingType, type Contact, type Directory, type Language, type Organization, type Position,
   type Conference, type Unit, type UnitKind,
 } from "../lib/directory";
 import { languageColor, languageColors, type LanguageColor } from "../lib/language-colors";
@@ -29,7 +30,7 @@ export type EditorState =
   | { resource: "assignments"; row?: Assignment; position: Position }
   | { resource: "assignments"; row?: never; position?: never; unit: Unit; callingType: CallingType }
   | { resource: "assignments"; row?: never; position?: never; unit: Unit; callingType?: never; standardRole: StandardCalling }
-  | { resource: "directory_access"; revoke?: string };
+  | { resource: "directory_access"; revoke?: string; member?: Access };
 
 const labels = {
   contacts: "Contact", units: "Unit", buildings: "Building", languages: "Language", organizations: "Organization", calling_types: "Calling type",
@@ -152,7 +153,7 @@ function AssignmentLabelsField({ assignments, initialLabels, disabled }: {
   </div>;
 }
 
-export function Editor({ state, directory, close }: { state: EditorState; directory: Directory; close: () => void }) {
+export function Editor({ state, directory, admin, close }: { state: EditorState; directory: Directory; admin: boolean; close: () => void }) {
   const row = "row" in state ? state.row : undefined;
   const resource = state.resource;
   const conference = state.resource === "stake_conferences" || state.resource === "ward_conferences" ? state : undefined;
@@ -166,6 +167,8 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
   const recordLabel = conference ? `${unitLabels[conference.unit.kind]} conference` : focusType ? "Focus person"
     : childEntryKind ? unitLabels[childEntryKind] : labels[resource];
   const revoke = resource === "directory_access" ? state.revoke : undefined;
+  const member = resource === "directory_access" ? state.member : undefined;
+  const lockedCouncilParent = unitKind === "council" && !directory.units.some(({ id }) => id === unitToEdit?.parent_id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [unitAddError, setUnitAddError] = useState("");
@@ -203,6 +206,8 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
   const canAssignBuildings = isBuildingScheduler(assignmentType, directory.calling_names);
   const buildingGroups = canAssignBuildings ? groupBuildingsByCity(directory.buildings) : [];
   const units = new Map(directory.units.map((unit) => [unit.id, unit]));
+  const councils = resource === "directory_access" ? directory.units.filter(({ kind }) => kind === "council")
+    .sort((a, b) => unitPath(a, units, "dropdown").localeCompare(unitPath(b, units, "dropdown"))) : [];
   const contactQueryTerms = contactQuery.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   const matchingContacts = resource === "assignments" && !row && !newContact && !selectedContactId && contactQueryTerms.length
     ? directory.contacts.filter((person) => !person.focus_type && contactQueryTerms.every((term) => person.name.toLocaleLowerCase().includes(term)))
@@ -275,7 +280,7 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
         const homeWardId = optional("home_ward_id");
         const contactDetails = {
           email: optional("email"), phone: optional("phone"),
-          ...(homeWardId || contact?.home_ward_id ? { home_ward_id: homeWardId } : {}),
+          ...(homeWardId || (contact?.home_ward_id && units.has(contact.home_ward_id)) ? { home_ward_id: homeWardId } : {}),
         };
         values = focusType ? {
           ...contactDetails, focus_type: focusType, first_name: value("first_name"), last_name: value("last_name"),
@@ -369,13 +374,16 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
         values = { position_id: state.position.id, contact_id: state.row.contact_id, ...details };
         break;
       }
-      case "directory_access": values = { email: value("email") }; break;
+      case "directory_access":
+        await run(() => saveCouncilAccess({ email: member?.email ?? value("email"),
+          councilIds: data.getAll("council_ids"), grantAccess: !member }));
+        return;
     }
     await run(() => saveRecord(state.resource, row?.id ?? null, values));
   }
 
   return (
-    <Modal title={revoke ? "Revoke access" : resource === "directory_access" ? "Grant access" :
+    <Modal title={revoke ? "Revoke access" : resource === "directory_access" ? (member ? "Edit coordinating councils" : "Grant access") :
       row ? `Edit ${recordLabel.toLowerCase()}` : `Add ${recordLabel.toLowerCase()}`} close={() => { if (!busy) close(); }}>
       {confirmDelete ? (
         <div className="modal-body">
@@ -427,13 +435,17 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               </label>
             </> : <ContactFields contact={contact} />}
             <HomeWardField units={directory.units} currentId={contact?.home_ward_id} />
+            {!admin && !contact && !focusType && <p className="field-help">
+              Choose a Home Ward to show this person in People. A calling or organization assignment in one of your councils also lists them there.
+            </p>}
           </>}
           {state.resource === "units" && <>
             <label>Unit name<input name="name" defaultValue={state.row?.name} maxLength={150} required /></label>
-            <label>Unit level<select value={kind} disabled={busy || lockKind} onChange={(event) => setKind(event.target.value as UnitKind)}>
+            <label>Unit level<select value={kind} disabled={busy || lockKind || lockedCouncilParent} onChange={(event) => setKind(event.target.value as UnitKind)}>
               {Object.entries(unitLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select></label>
-            {kind !== "region" && <label>Parent {unitLabels[parentKinds[kind]].toLowerCase()}
+            {lockedCouncilParent && <input type="hidden" name="parent_id" value={unitToEdit?.parent_id ?? ""} />}
+            {kind !== "region" && !lockedCouncilParent && <label>Parent {unitLabels[parentKinds[kind]].toLowerCase()}
               <select key={kind} name="parent_id" defaultValue={kind === state.row?.kind
                 ? state.row.parent_id ?? ""
                 : state.parent?.kind === parentKinds[kind] ? state.parent.id : ""} required>
@@ -642,15 +654,29 @@ export function Editor({ state, directory, close }: { state: EditorState; direct
               <label>Release date<input type="date" name="released_on" /></label>
             </details>}
           </>}
-          {state.resource === "directory_access" && <label>Google account email<input name="email" type="email" maxLength={254} required /></label>}
+          {state.resource === "directory_access" && <>
+            {member ? <p>{member.email}</p>
+              : <label>Google account email<input name="email" type="email" maxLength={254} required /></label>}
+            <fieldset>
+              <legend>Coordinating councils</legend>
+              <p className="field-help">Members can view and work with all stakes, wards, and branches in the councils you select.</p>
+              {councils.length ? <div className="assignment-building-options">
+                {councils.map((council) => <label className="check" key={council.id}>
+                  <input type="checkbox" name="council_ids" value={council.id}
+                    defaultChecked={member?.directory_access_councils.some(({ council_id }) => council_id === council.id)} />
+                  {unitPath(council, units, "dropdown")}
+                </label>)}
+              </div> : <p className="field-help">No coordinating councils are available yet.</p>}
+            </fieldset>
+          </>}
           {error && <p className="notice error" role="alert">{error}</p>}
           <div className="form-actions">
-            {row && <button type="button" className="button text-danger push" disabled={busy} onClick={() => {
+            {row && !lockedCouncilParent && <button type="button" className="button text-danger push" disabled={busy} onClick={() => {
               setError(""); setConfirmDelete(true);
             }}>Delete</button>}
             <button type="button" className="button" disabled={busy} onClick={close}>Cancel</button>
             <button className="button primary" disabled={busy || (resource === "assignments" && !row && !newContact && !selectedContactId)}>
-              {busy ? "Saving…" : resource === "directory_access" ? "Grant access" : "Save changes"}
+              {busy ? "Saving…" : resource === "directory_access" && !member ? "Grant access" : "Save changes"}
             </button>
           </div>
         </form>

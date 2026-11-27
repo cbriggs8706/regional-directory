@@ -20,7 +20,7 @@ export function RouteNavigation({ children, loading }: { children: ReactNode; lo
   }
 
   return <NavigationContext.Provider value={navigate}>
-    <div inert={pending}>{children}</div>
+    <div className="route-content" inert={pending}>{children}</div>
     {pending && <div className="route-loading-overlay">{loading}</div>}
   </NavigationContext.Provider>;
 }

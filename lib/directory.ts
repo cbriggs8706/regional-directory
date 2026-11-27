@@ -147,7 +147,7 @@ export type Assignment = {
   released_on: string | null;
   assignment_buildings?: { building_id: string }[];
 };
-export type Access = { email: string; is_admin: boolean };
+export type Access = { email: string; is_admin: boolean; directory_access_councils: { council_id: string }[] };
 
 export type Directory = {
   units: Unit[];

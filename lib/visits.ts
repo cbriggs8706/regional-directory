@@ -49,34 +49,10 @@ export function offsetDate(date: string, days: number) {
   return value.toISOString().slice(0, 10);
 }
 
-export function startOfWeek(date: string) {
-  return offsetDate(date, -new Date(`${date}T00:00:00Z`).getUTCDay());
-}
-
 export function offsetMonth(date: string, months: number) {
   const first = new Date(`${date.slice(0, 7)}-01T00:00:00Z`);
   first.setUTCMonth(first.getUTCMonth() + months);
   return first.toISOString().slice(0, 10);
-}
-
-export type VisitView = "rolling" | "month" | "week";
-
-export function shiftVisitPeriod(date: string, view: VisitView, direction: -1 | 1) {
-  if (view === "week") return offsetDate(date, direction * 7);
-  if (view === "month") return offsetMonth(date, direction);
-  const first = offsetMonth(date, direction * 3);
-  const last = offsetDate(offsetMonth(first, 1), -1);
-  return first.slice(0, 8) + (date.slice(8) < last.slice(8) ? date.slice(8) : last.slice(8));
-}
-
-export function visitPeriod(date: string, view: VisitView, allDays: boolean) {
-  const from = view === "rolling" ? date : view === "month" ? offsetMonth(date, 0) : startOfWeek(date);
-  const until = shiftVisitPeriod(from, view, 1);
-  const days: string[] = [];
-  for (let day = from; day < until; day = offsetDate(day, 1)) {
-    if (allDays || day === startOfWeek(day)) days.push(day);
-  }
-  return { from, until, days };
 }
 
 export function timeToMinute(time: string) {

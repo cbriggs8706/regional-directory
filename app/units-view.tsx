@@ -116,10 +116,11 @@ function UnitNode({ unit, ...tree }: UnitTreeProps & { unit: Unit }) {
   );
 }
 
-export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
+export function UnitsView({ directory, browseUnitId, organizationDirectory, councilScope }: {
   directory: Directory;
   organizationDirectory: OrganizationDirectory;
   browseUnitId: string;
+  councilScope: boolean;
 }) {
   const { units, buildings, languages } = directory;
   const { organizations } = organizationDirectory;
@@ -237,7 +238,9 @@ export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
     ancestor = unitsById.get(ancestor.parent_id ?? "");
   }
 
-  const region = regions.find((entry) => entry.id === (regionId || browseRegionId)) ?? regions[0];
+  const councilRegionIds = new Set(sortedUnits.filter(({ kind }) => kind === "council").map(({ parent_id }) => parent_id));
+  const region = regions.find((entry) => entry.id === (regionId || browseRegionId))
+    ?? (councilScope ? regions.find(({ id }) => councilRegionIds.has(id)) : undefined) ?? regions[0];
   const councils = region ? childrenByParent.get(region.id) ?? [] : [];
   const regionOrganizations = region ? organizationsByUnit.get(region.id) ?? [] : [];
   const expandedByDefault = (unitId: string) => nonEnglishOnly || browsePath.has(unitId);
@@ -356,12 +359,12 @@ export function UnitsView({ directory, browseUnitId, organizationDirectory }: {
             </li>;
           })}
         </ul>}
-      </div> : region && (councils.length > 0 || regionOrganizations.length > 0) ? <ul id="unit-councils" className="unit-councils" aria-label={`${region.name} children`}>
+      </div> : (councils.length > 0 || regionOrganizations.length > 0) ? <ul id="unit-councils" className="unit-councils" aria-label={region ? `${region.name} children` : "Coordinating councils"}>
         {councils.map((unit) => <UnitNode key={unit.id} unit={unit} {...tree} />)}
         {regionOrganizations.map((organization) => <OrganizationNode key={organization.id} organization={organization} tree={tree} />)}
       </ul> : <div className="panel empty">
         <span><Building2 size={25} aria-hidden /></span>
-        <h2>{region ? (nonEnglishOnly ? "No non-English units in this region" : "No coordinating councils yet") : "No region yet"}</h2>
+        <h2>{councilScope ? (nonEnglishOnly ? "No non-English units" : "No coordinating councils assigned") : region ? (nonEnglishOnly ? "No non-English units in this region" : "No coordinating councils yet") : "No region yet"}</h2>
       </div>}
     </section>
   );

@@ -16,7 +16,9 @@ A private, mobile-first directory for people serving in Church callings. The uni
    ```
 
 6. To send directly from the directory, set `RESEND_API_KEY` to a sending key and `RESEND_FROM` to an address on a verified Resend domain, optionally with a display name such as `Regional Directory <directory@example.com>`. Replies go to the signed-in sender. Copying addresses for Gmail works without Resend.
-7. Run `bun run dev` and open [localhost:3000](http://localhost:3000). Open **Access** as the administrator to approve additional Google accounts.
+7. Run `bun run dev` and open [localhost:3000](http://localhost:3000). Open **More → Admin** to grant council access, edit existing assignments, or preview a member’s directory in read-only mode.
+
+The council access migration starts existing members with all coordinating councils present when the migration runs. It does not automatically add newly created councils to their access. Member dashboards aggregate only their assigned councils. Existing contacts and buildings without a unit or organization link are visible to the administrator until linked.
 
 ## Family History dashboard
 
@@ -34,9 +36,7 @@ A private, mobile-first directory for people serving in Church callings. The uni
 - Edit a stake, ward, or branch to add its **Website URL**. The link opens from the Units tree.
 - Under **Units → Buildings**, enter the building's street address, city, state, and ZIP code. State starts at **ID** and can be edited. Choose the **Agent Stake** that oversees the building and optionally upload a JPEG, PNG, or WebP picture up to 4 MB. Pictures are stored in the private Supabase `buildings` bucket. Fill in missing city and ZIP information when editing older building records. Edit a unit to select its building. Units under different stakes can share a building.
 - **Calendar** shows stake, ward, and branch conferences alongside organization events. Turn on **Show my visits** to include your own visit planner events.
-- **More → My Calendar** opens the visit planner to a rolling three months of Sundays, one date per row. Switch to **Month** or **Week**, or turn on **All days** to include weekdays and Saturdays.
-- Filter units by unit hierarchy or language, including sub-congregations. Drag a unit onto a date or choose **Schedule**. Each saved sacrament or council start time becomes a one-hour event. Drag the left or right edge of an event to change its time, or open it to edit the times directly.
-- Click a time on the calendar to add a personal driving block. Set your start and end times and optionally name the trip. The calendar uses Mountain Time, and **Show other users’ visits** displays team events alongside yours.
+- **More → My Calendar** displays your visits and private events in a month grid on desktop and a date-grouped list on mobile. Use the bottom **+** to add a visit or a private all-day event. When scheduling a unit visit, you can use its saved sacrament and council meeting times. Select a visit or event to edit or remove it.
 - If a ward or branch includes a sub-congregation that speaks another language, check that option when editing the unit and select the sub-congregation’s language.
 - In **Callings**, add an organization such as Bishopric or Relief Society and choose its level. Add callings within that organization, or edit a calling to move it to another organization. Organization headings and calling titles are shared by units at the same level. Ward-level organizations also appear in branches.
 - Edit an organization’s **Display order** to move its heading. Choose **Reorder** inside an organization to arrange its callings. Every active calling supports multiple current holders. Use **Add another holder** to assign someone alongside the current holders.
