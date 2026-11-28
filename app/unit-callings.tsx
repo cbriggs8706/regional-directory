@@ -99,12 +99,16 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
           const holders = position ? assignmentsByPosition.get(position.id) ?? [] : [];
           const current = holders.filter((assignment) => !assignment.released_on)
             .sort((a, b) => holderName(a).localeCompare(holderName(b)));
+          const legacyCounselor = template === "bishopric"
+            ? /^(bishopric )?(first|second|1st|2nd) counselor$/i.test(calling.name.trim())
+            : template === "stake-presidency"
+              && /^(stake presidency )?(first|second|1st|2nd) counselor$/i.test(calling.name.trim());
           const cards = position && current.length > 0
             ? current.map((assignment, index) => ({
-              element: holderCard(assignment, calling, position, index === 0 && !position.retired_on), vacancy: false,
+              element: holderCard(assignment, calling, position, index === 0 && !position.retired_on && !legacyCounselor), vacancy: false,
             }))
-            : [vacantCard(calling.id, calling.name, () => addHolder(calling, position), Boolean(position?.retired_on))];
-          return { calling, position, holders, current, cards };
+            : legacyCounselor ? [] : [vacantCard(calling.id, calling.name, () => addHolder(calling, position), Boolean(position?.retired_on))];
+          return { calling, position, holders, current, cards, legacyCounselor };
         });
         const emails = roles.flatMap(({ current }) => current.map(({ contact_id }) => contacts.get(contact_id)?.email));
         const past = roles.flatMap(({ calling, position, holders }) => position
@@ -121,7 +125,7 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
           }
           const numberedRoles = new Set(numbered.values());
           const unnumbered = roles.filter((role) => !numberedRoles.has(role));
-          const shared = unnumbered.filter(({ calling, position }) => !position?.retired_on && (template === "high-council"
+          const shared = unnumbered.filter(({ calling, position, legacyCounselor }) => !legacyCounselor && !position?.retired_on && (template === "high-council"
             ? /council|member/i.test(calling.name) && !/clerk|secretary/i.test(calling.name)
             : /coun[sc]ell?or/i.test(calling.name)));
           const sharedRoles = new Set(shared);
@@ -180,16 +184,17 @@ export function UnitCallings({ unit, directory, edit, title, admin }: {
                   onClick={() => openEditor({ resource: "calling_types", organization })}>Add calling</button>}
               </div>
               {roles.length > 0 && <ul className="management-list unit-calling-roles">
-                {roles.map(({ calling, position }) => {
+                {roles.map(({ calling, position, legacyCounselor }) => {
+                  if (legacyCounselor && !position) return null;
                   const addPast = Boolean(position?.retired_on);
                   return <li key={calling.id}>
                     <div><strong>{calling.name}</strong>
                       {position?.retired_on && <small>Retired {dateFormat.format(new Date(position.retired_on))}</small>}
                     </div>
-                    <button type="button" className="button" aria-label={`${addPast ? "Add past holder" : "Add holder"} for ${calling.name}`}
+                    {!legacyCounselor && <button type="button" className="button" aria-label={`${addPast ? "Add past holder" : "Add holder"} for ${calling.name}`}
                       onClick={() => openEditor(position ? { resource: "assignments", position } : { resource: "assignments", unit, callingType: calling })}>
                       {addPast ? "Add past holder" : "Add holder"}
-                    </button>
+                    </button>}
                     {position && <button type="button" className="icon-button" aria-label={`Edit calling settings for ${calling.name}`}
                       title="Edit calling settings" onClick={() => openEditor({ resource: "positions", row: position })}>
                       <Pencil size={16} aria-hidden />

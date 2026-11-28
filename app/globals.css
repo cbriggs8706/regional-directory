@@ -447,6 +447,9 @@ dialog::backdrop { background: #09271f69; }
 .push { margin-right: auto; }
 .notice { color: var(--dark-green); background: var(--mint); padding: 10px 12px; border-radius: 8px; font-size: .9rem; }
 .notice.error { color: var(--danger); background: #fbecee; }
+.contact-match-warning { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.contact-match-warning ul { max-height: 190px; overflow: auto; }
+.contact-match-warning li + li { margin-top: 8px; }
 .status-line { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .status-line .icon-button { min-height: 26px; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }

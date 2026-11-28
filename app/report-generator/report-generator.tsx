@@ -49,6 +49,7 @@ export function ReportGenerator({
 						<input
 							type="month"
 							name="month"
+							autoFocus
 							defaultValue={month}
 							min="0001-01"
 							max="9999-12"

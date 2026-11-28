@@ -1,12 +1,12 @@
 "use client";
 
-import { useRef, useState, type ClipboardEvent, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent, type Ref } from "react";
 import { saveCouncilAccess } from "./access-actions";
 import { Plus, X } from "lucide-react";
 import { focusTypes, focusTypeLabels, type FocusType } from "../lib/focus-people";
 import { addCallingHolder, addChildUnits, deleteRecord, saveBuilding, saveRecord, saveSchedulerAssignment, type Resource } from "./actions";
 import {
-  formatBuildingAddress, groupBuildingsByCity,
+  formatBuildingAddress, groupBuildingsByCity, unitNameWithType,
   callingLevelLabel, callingLevels, callingPath, childUnitEntry, compareCallingOrder, hasSacramentMeeting, isBuildingScheduler, parentKinds, unitFacebookUrls, unitLabels, unitPath,
   type Access, type Assignment, type Building, type CallingLevel, type CallingType, type Contact, type Directory, type Language, type Organization, type Position,
   type Conference, type Unit, type UnitKind,
@@ -14,6 +14,7 @@ import {
 import { languageColor, languageColors, type LanguageColor } from "../lib/language-colors";
 import { standardCallingGroups, type StandardCalling } from "../lib/standard-callings";
 import { BuildingField, BuildingFields, prepareBuildingPhoto } from "./building-fields";
+import { ContactMatchWarning, useContactMatchCheck } from "./contact-match-warning";
 import { Modal } from "./modal";
 
 export { Modal } from "./modal";
@@ -38,7 +39,9 @@ const labels = {
   positions: "Calling in unit", assignments: "Assignment", directory_access: "Access",
 } satisfies Record<Resource, string>;
 
-export function ContactFields({ contact }: { contact?: Contact }) {
+export function ContactFields({ contact, nameRef, autoFocus, onNameChange }: {
+  contact?: Contact; nameRef?: Ref<HTMLInputElement>; autoFocus?: boolean; onNameChange?: () => void;
+}) {
   const [fields, setFields] = useState({
     name: contact?.name ?? "",
     phone: contact?.phone ?? "",
@@ -59,14 +62,16 @@ export function ContactFields({ contact }: { contact?: Contact }) {
     }
 
     const [name, phone, email] = cells.map((cell) => cell.trim().replace(/^"(.*)"$/, (_, value: string) => value.replace(/""/g, '"')));
+    if (name !== fields.name) onNameChange?.();
     setFields({ name, phone, email });
     setPasteError("");
   }
 
   return <>
     <label>Full name
-      <input name="name" value={fields.name} maxLength={150} required
+      <input ref={nameRef} autoFocus={autoFocus} name="name" value={fields.name} maxLength={150} required
         onChange={(event) => {
+          onNameChange?.();
           setFields({ ...fields, name: event.target.value });
           setPasteError("");
         }}
@@ -196,9 +201,17 @@ export function Editor({ state, directory, admin, close }: { state: EditorState;
   );
   const [retired, setRetired] = useState(Boolean(state.resource === "positions" && state.row?.retired_on));
   const [newContact, setNewContact] = useState(true);
+  const [releaseDate, setReleaseDate] = useState("");
+  const contactMatch = useContactMatchCheck();
   const [contactQuery, setContactQuery] = useState("");
   const [selectedContactId, setSelectedContactId] = useState("");
   const contactSearch = useRef<HTMLInputElement>(null);
+  const fullName = useRef<HTMLInputElement>(null);
+
+  useLayoutEffect(() => {
+    if (newContact) fullName.current?.focus();
+  }, [newContact]);
+
   const types = new Map(directory.calling_types.map((type) => [type.id, type]));
   const assignmentType = state.resource === "assignments"
     ? (state.position ? types.get(state.position.calling_type_id) : state.callingType)
@@ -206,6 +219,9 @@ export function Editor({ state, directory, admin, close }: { state: EditorState;
   const canAssignBuildings = isBuildingScheduler(assignmentType, directory.calling_names);
   const buildingGroups = canAssignBuildings ? groupBuildingsByCity(directory.buildings) : [];
   const units = new Map(directory.units.map((unit) => [unit.id, unit]));
+  const assignmentUnit = state.resource === "assignments" && !state.row && !state.position?.retired_on && !releaseDate
+    ? (state.position ? units.get(state.position.unit_id) : state.unit) : undefined;
+  const automaticHomeWard = assignmentUnit && hasSacramentMeeting(assignmentUnit.kind) ? assignmentUnit : undefined;
   const councils = resource === "directory_access" ? directory.units.filter(({ kind }) => kind === "council")
     .sort((a, b) => unitPath(a, units, "dropdown").localeCompare(unitPath(b, units, "dropdown"))) : [];
   const contactQueryTerms = contactQuery.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -231,11 +247,12 @@ export function Editor({ state, directory, admin, close }: { state: EditorState;
     contactSearch.current?.focus();
   }
 
-  async function run(operation: () => Promise<{ error: string | null }>) {
+  async function run(operation: () => Promise<{ error: string | null } | undefined>) {
     setBusy(true);
     setError("");
     try {
       const result = await operation();
+      if (!result) return;
       if (result.error) setError(result.error);
       else close();
     } catch {
@@ -355,15 +372,19 @@ export function Editor({ state, directory, admin, close }: { state: EditorState;
           const unitId = state.position ? state.position.unit_id : state.unit.id;
           const callingTypeId = state.position ? state.position.calling_type_id : state.callingType?.id;
           const standardRole = "standardRole" in state ? state.standardRole : undefined;
-          await run(() => addCallingHolder({
-            unit_id: unitId, calling_type_id: callingTypeId, standard_role: standardRole, ...details,
-            contact_id: newContact ? null : selectedContactId,
-            new_contact_name: newContact ? optional("name") : null,
-            new_contact_phone: newContact ? optional("phone") : null,
-            new_contact_email: newContact ? optional("email") : null,
-            new_contact_home_ward_id: newContact ? optional("home_ward_id") : null,
-            building_ids: buildingIds ?? [],
-          }));
+          const contactName = newContact ? value("name") : "";
+          await run(async () => {
+            if (newContact && await contactMatch.needsConfirmation(contactName)) return;
+            return addCallingHolder({
+              unit_id: unitId, calling_type_id: callingTypeId, standard_role: standardRole, ...details,
+              contact_id: newContact ? null : selectedContactId,
+              new_contact_name: contactName || null,
+              new_contact_phone: newContact ? optional("phone") : null,
+              new_contact_email: newContact ? optional("email") : null,
+              new_contact_home_ward_id: newContact ? optional("home_ward_id") : null,
+              building_ids: buildingIds ?? [],
+            });
+          });
           return;
         }
         if (buildingIds) {
@@ -605,10 +626,13 @@ export function Editor({ state, directory, admin, close }: { state: EditorState;
                   <button type="button" className="button" aria-pressed={newContact} disabled={busy}
                     onClick={() => setNewContact(true)}>New contact</button>
                   <button type="button" className="button" aria-pressed={!newContact} disabled={busy}
-                    onClick={() => setNewContact(false)}>Existing contact</button>
+                    onClick={() => { contactMatch.reset(); setNewContact(false); }}>Existing contact</button>
                 </div>
                 <div hidden={!newContact}>
-                  <fieldset disabled={!newContact || busy}><ContactFields /><HomeWardField units={directory.units} /></fieldset>
+                  <fieldset disabled={!newContact || busy}>
+                    <ContactFields nameRef={fullName} onNameChange={contactMatch.reset} />
+                    {!automaticHomeWard && <HomeWardField units={directory.units} />}
+                  </fieldset>
                 </div>
                 {!newContact && <>
                   <label>Search by name
@@ -630,6 +654,9 @@ export function Editor({ state, directory, admin, close }: { state: EditorState;
                   {!selectedContactId && contactQueryTerms.length > 0 && matchingContacts.length === 0 &&
                     <p className="field-help" role="status">No contacts found.</p>}
                 </>}
+                {automaticHomeWard && <p className="field-help">
+                  Saving this calling sets the person’s Home Ward to {unitNameWithType(automaticHomeWard)}.
+                </p>}
               </fieldset>
             </>}
             {canAssignBuildings && <fieldset>
@@ -651,7 +678,8 @@ export function Editor({ state, directory, admin, close }: { state: EditorState;
               <input type="date" name="released_on" defaultValue={state.row?.released_on ?? ""} required={pastAssignment} />
             </label> : <details>
               <summary className="text-button">Record a past holder</summary>
-              <label>Release date<input type="date" name="released_on" /></label>
+              <label>Release date<input type="date" name="released_on" value={releaseDate}
+                onChange={(event) => setReleaseDate(event.target.value)} /></label>
             </details>}
           </>}
           {state.resource === "directory_access" && <>
@@ -670,13 +698,14 @@ export function Editor({ state, directory, admin, close }: { state: EditorState;
             </fieldset>
           </>}
           {error && <p className="notice error" role="alert">{error}</p>}
+          {contactMatch.warning && <ContactMatchWarning warning={contactMatch.warning} units={units} />}
           <div className="form-actions">
             {row && !lockedCouncilParent && <button type="button" className="button text-danger push" disabled={busy} onClick={() => {
               setError(""); setConfirmDelete(true);
             }}>Delete</button>}
             <button type="button" className="button" disabled={busy} onClick={close}>Cancel</button>
             <button className="button primary" disabled={busy || (resource === "assignments" && !row && !newContact && !selectedContactId)}>
-              {busy ? "Saving…" : resource === "directory_access" && !member ? "Grant access" : "Save changes"}
+              {busy ? "Saving…" : contactMatch.warning ? "Create new person" : resource === "directory_access" && !member ? "Grant access" : "Save changes"}
             </button>
           </div>
         </form>

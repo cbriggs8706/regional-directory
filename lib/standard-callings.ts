@@ -2,9 +2,9 @@ import type { CallingLevel, Directory, UnitKind } from "./directory";
 
 export const standardCallingGroups = {
   bishopric: { name: "Bishopric", level: "ward", kind: "ward",
-    roles: ["Bishop", "Bishopric First Counselor", "Bishopric Second Counselor"] },
+    roles: ["Bishop", "Bishopric Counselor"] },
   "stake-presidency": { name: "Stake Presidency", level: "stake", kind: "stake",
-    roles: ["Stake President", "Stake Presidency First Counselor", "Stake Presidency Second Counselor"] },
+    roles: ["Stake President", "Stake Presidency Counselor"] },
   "high-council": { name: "High Council", level: "stake", kind: "stake",
     roles: Array.from({ length: 12 }, (_, index) => `High Councilor ${index + 1}`) },
 } as const;
@@ -34,8 +34,7 @@ export function standardRoleIndex(group: StandardCallingGroup, name: string) {
   if (!/coun[sc]ell?or/.test(normalized)) {
     return (group === "bishopric" ? normalized === "bishop" : /^(stake )?president$/.test(normalized)) ? 0 : -1;
   }
-  if (/\b(first|1st|1)\b/.test(normalized)) return 1;
-  if (/\b(second|2nd|2)\b/.test(normalized)) return 2;
+  if (normalized === "counselor" || normalized === standardCallingGroups[group].roles[1].toLowerCase()) return 1;
   return -1;
 }
 

@@ -51,8 +51,9 @@ export function CalendarAccessEditor({ email, accounts, close, saved }: {
       </p>}
       {loaded && !loaded.error && (options.length > 0 ? <fieldset disabled={busy}>
         <legend>Whose visits and personal events can this user see?</legend>
-        {options.map((account) => <label className="check" key={account}>
-          <input type="checkbox" name="visible_emails" value={account} defaultChecked={loaded.emails.includes(account)} />{account}
+        {options.map((account, index) => <label className="check" key={account}>
+          <input type="checkbox" name="visible_emails" value={account}
+            defaultChecked={loaded.emails.includes(account)} autoFocus={index === 0} />{account}
         </label>)}
       </fieldset> : <p className="field-help">No other accounts have directory access.</p>)}
       {error && <p className="notice error" role="alert">{error}</p>}

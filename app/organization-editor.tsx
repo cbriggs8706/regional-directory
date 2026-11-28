@@ -13,6 +13,7 @@ import { journalNotesMaxLength } from "../lib/unit-journal";
 import { todayInVisitZone } from "../lib/visits";
 import { BuildingField } from "./building-fields";
 import { ContactFields, HomeWardField } from "./editor";
+import { ContactMatchWarning, useContactMatchCheck } from "./contact-match-warning";
 import { Modal } from "./modal";
 import { removeOrganizationRecord, saveOrganizationRecord } from "./organization-actions";
 
@@ -68,6 +69,7 @@ export function OrganizationEditor({ state, directory, close }: {
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [newContact, setNewContact] = useState(false);
+  const contactMatch = useContactMatchCheck();
   const { resource } = state;
   const row = "row" in state ? state.row : undefined;
   const label = resourceLabels[resource];
@@ -118,6 +120,7 @@ export function OrganizationEditor({ state, directory, close }: {
             input = { resource, id: state.row?.id, organizationId: state.organizationId, values: { name: form.get("name") } };
             break;
           case "organization_assignments":
+            if (newContact && await contactMatch.needsConfirmation(String(form.get("name") ?? "").trim())) return;
             input = { resource, organizationId: state.organizationId, values: {
               title_id: state.title.id, active: form.has("active"),
               ...(newContact ? { new_contact: {
@@ -180,7 +183,10 @@ export function OrganizationEditor({ state, directory, close }: {
         {resource === "organization_assignments" && <>
           <p>{state.title.name}</p>
           <label>Person
-            <select name="contact_id" defaultValue="" required onChange={(event) => setNewContact(event.target.value === "new")}>
+            <select name="contact_id" defaultValue="" required disabled={busy} onChange={(event) => {
+              contactMatch.reset();
+              setNewContact(event.target.value === "new");
+            }}>
               <option value="" disabled>Select a person</option>
               <option value="new">Add a new person</option>
               {availablePeople.map(({ id, name, email, phone }) => <option key={id} value={id}>
@@ -188,7 +194,10 @@ export function OrganizationEditor({ state, directory, close }: {
               </option>)}
             </select>
           </label>
-          {newContact && <><ContactFields /><HomeWardField units={directory.units} /></>}
+          {newContact && <fieldset disabled={busy}>
+            <ContactFields autoFocus onNameChange={contactMatch.reset} />
+            <HomeWardField units={directory.units} />
+          </fieldset>}
         </>}
         {resource === "assignment_status" && <p>{directory.contacts.find(({ id }) => id === state.row.contact_id)?.name}</p>}
         {(resource === "organization_assignments" || resource === "assignment_status") && <label className="check">
@@ -207,6 +216,7 @@ export function OrganizationEditor({ state, directory, close }: {
         </>}
       </>}
       {error && <p className="notice error" role="alert">{error}</p>}
+      {contactMatch.warning && <ContactMatchWarning warning={contactMatch.warning} units={units} />}
       <div className="form-actions">
         {canDelete && !confirmDelete && <button type="button" className="button danger" disabled={busy} onClick={() => {
           setError("");
@@ -217,7 +227,7 @@ export function OrganizationEditor({ state, directory, close }: {
           else close();
         }}>Cancel</button>
         <button type="submit" className={confirmDelete ? "button danger" : "button primary"} disabled={busy || (resource === "directory_organizations" && !agents.length)}>
-          {busy ? (confirmDelete ? "Deleting…" : "Saving…") : confirmDelete ? "Delete" : "Save"}
+          {busy ? (confirmDelete ? "Deleting…" : "Saving…") : confirmDelete ? "Delete" : contactMatch.warning ? "Create new person" : "Save"}
         </button>
       </div>
     </form>

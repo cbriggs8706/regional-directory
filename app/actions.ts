@@ -5,7 +5,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { buildingPhotoMaxBytes, buildingPhotoTypes, callingLevels, childUnitEntry, normalizeEmail, unitLabels, type Building } from "../lib/directory";
+import { buildingPhotoMaxBytes, buildingPhotoTypes, callingLevels, childUnitEntry, normalizeEmail, unitLabels, type Building, type Contact } from "../lib/directory";
+import { contactNameMatcher } from "../lib/contact-name-match";
 import { focusTypes } from "../lib/focus-people";
 import { languageColors } from "../lib/language-colors";
 import { createDirectoryClient, getViewer, previewCookie } from "../lib/supabase";
@@ -124,6 +125,30 @@ function revalidateDirectory() {
   revalidatePath("/units/[id]", "page");
   revalidatePath("/buildings");
   revalidatePath("/languages");
+}
+
+export async function checkContactName(value: unknown) {
+  const parsed = name.safeParse(value);
+  if (!parsed.success) return { matches: null };
+  const viewer = await getViewer({ write: true });
+  if (!viewer?.role) return { matches: null };
+
+  type ContactMatch = Pick<Contact, "id" | "name" | "phone" | "email" | "home_ward_id">;
+  const scoreName = contactNameMatcher(parsed.data);
+  const matches: { contact: ContactMatch; score: number }[] = [];
+  for (let start = 0; ; start += 500) {
+    const { data, error } = await viewer.client.from("contacts").select("id,name,phone,email,home_ward_id")
+      .order("id").range(start, start + 499);
+    if (error) return { matches: null };
+    for (const contact of data) {
+      const score = scoreName(contact.name);
+      if (score !== null) matches.push({ contact, score });
+    }
+    if (data.length < 500) break;
+  }
+
+  matches.sort((a, b) => b.score - a.score || a.contact.name.localeCompare(b.contact.name));
+  return { matches: matches.map(({ contact }) => contact) };
 }
 
 export async function saveContactDetails(id: string, values: unknown) {
@@ -283,7 +308,9 @@ async function ensureStandardCalling(client: NonNullable<Awaited<ReturnType<type
   if (existing) return existing.id as string;
 
   // A stable ID lets simultaneous requests set up the same missing calling once.
-  const hash = createHash("sha256").update(`standard-calling:${organization.id}:${group}:${index}`).digest("hex");
+  // The shared counselor has its own key because the legacy First Counselor used index 1.
+  const roleKey = group !== "high-council" && index === 1 ? "counselor" : index;
+  const hash = createHash("sha256").update(`standard-calling:${organization.id}:${group}:${roleKey}`).digest("hex");
   const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
   const { error: insertError } = await client.from("calling_types").upsert({
     id, name: title, organization_id: organization.id, level: template.level,
